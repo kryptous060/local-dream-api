@@ -178,6 +178,10 @@
     <string name="back_to_folders">フォルダに戻る</string>
     <string name="model_folder">モデル: %s</string>
     <string name="file_count">%dのファイル</string>
+    <string name="clear_cache">キャッシュを消去</string>
+    <string name="clear_cache_with_size">キャッシュを消去 (%s)</string>
+    <string name="clear_cache_confirm">このモデルのキャッシュディレクトリを消去しますか？プロンプトキャッシュと OpenCL キャッシュは次回使用時に再生成されます。</string>
+    <string name="cache_cleared">キャッシュを消去しました</string>
     <string name="download_source">ダウンロード先</string>
     <string name="feature_settings">機能設定</string>
     <string name="file_management">ファイル管理</string>

@@ -2007,7 +2007,12 @@ private fun FileManagerDialog(
     var selectedFolder by remember { mutableStateOf<String?>(null) }
     var folderFiles by remember { mutableStateOf<List<File>>(emptyList()) }
     var showDeleteConfirm by remember { mutableStateOf<File?>(null) }
+    var showClearCacheConfirm by remember { mutableStateOf(false) }
     var isLoading by remember { mutableStateOf(true) }
+    // Tracked separately so the "Clear Cache" button can light up without
+    // exposing the cache directory as a fake "file" entry in the list.
+    var cacheDir by remember { mutableStateOf<File?>(null) }
+    var cacheSize by remember { mutableStateOf(0L) }
 
     fun loadFolders() {
         val modelsDir = Model.getModelsDir(context)
@@ -2030,7 +2035,11 @@ private fun FileManagerDialog(
     fun loadFilesForFolder(folderName: String) {
         val modelsDir = Model.getModelsDir(context)
         val folderDir = File(modelsDir, folderName)
-        folderFiles = folderDir.listFiles()?.toList() ?: emptyList()
+        val all = folderDir.listFiles()?.toList() ?: emptyList()
+        val cd = all.firstOrNull { it.isDirectory && it.name == "cache" }
+        cacheDir = cd
+        cacheSize = cd?.walkTopDown()?.filter { it.isFile }?.sumOf { it.length() } ?: 0L
+        folderFiles = all.filter { it.isFile }
     }
 
     LaunchedEffect(Unit) {
@@ -2062,6 +2071,39 @@ private fun FileManagerDialog(
             },
             dismissButton = {
                 TextButton(onClick = { showDeleteConfirm = null }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            }
+        )
+    }
+
+    if (showClearCacheConfirm) {
+        AlertDialog(
+            onDismissRequest = { showClearCacheConfirm = false },
+            title = { Text(stringResource(R.string.clear_cache)) },
+            text = { Text(stringResource(R.string.clear_cache_confirm)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        cacheDir?.deleteRecursively()
+                        showClearCacheConfirm = false
+                        Toast.makeText(
+                            context,
+                            context.getString(R.string.cache_cleared),
+                            Toast.LENGTH_SHORT
+                        ).show()
+                        onFileDeleted()
+                        selectedFolder?.let { loadFilesForFolder(it) }
+                    },
+                    colors = ButtonDefaults.textButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error
+                    )
+                ) {
+                    Text(stringResource(R.string.clear_cache))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showClearCacheConfirm = false }) {
                     Text(stringResource(R.string.cancel))
                 }
             }
@@ -2280,6 +2322,29 @@ private fun FileManagerDialog(
         confirmButton = {
             TextButton(onClick = onDismiss) {
                 Text(stringResource(R.string.close))
+            }
+        },
+        dismissButton = {
+            if (selectedFolder != null && cacheDir != null) {
+                TextButton(
+                    onClick = { showClearCacheConfirm = true },
+                    colors = ButtonDefaults.textButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error
+                    )
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.CleaningServices,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.size(6.dp))
+                    Text(
+                        stringResource(
+                            R.string.clear_cache_with_size,
+                            formatFileSize(cacheSize)
+                        )
+                    )
+                }
             }
         }
     )

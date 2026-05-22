@@ -22,6 +22,7 @@
 #include "SDUtils.hpp"
 #include "SafeTensor2MNN.hpp"
 #include "Scheduler.hpp"
+#include "Sha256.hpp"
 
 // QNN Headers
 #include "BuildId.hpp"
@@ -98,16 +99,27 @@ MNN::Session *safetyCheckerSession = nullptr;
 std::string prompt;
 std::string negative_prompt;
 
-// CLIP output cache: if prompt + negative_prompt are identical to the previous
-// request, reuse the cached text-encoder outputs and skip CLIP inference
-// entirely. Buffers below are kept per-pipeline so SD1.5 and SDXL are handled
-// uniformly.
-bool clip_cache_valid = false;
-std::string cached_prompt;
-std::string cached_negative_prompt;
-std::vector<float> cached_text_embedding_float;        // SD1.5 encoder output
-std::vector<float> cached_sdxl_encoder_hidden_states;  // SDXL concat hidden
-std::vector<float> cached_sdxl_text_embeds;            // SDXL pooled
+// Persistent per-prompt CLIP cache lives on disk under
+// {modelDir}/cache/prompt_<sha32>.bin. Positive and negative prompts are
+// looked up independently: a single side hit still skips half the CLIP work.
+// A prompt that uses a textual-inversion embedding is excluded (its CLIP
+// output depends on embedding state we don't want baked into a stable file).
+namespace prompt_cache {
+constexpr char kMagic[4] = {'P', 'C', 'L', 'P'};
+constexpr uint32_t kVersion = 1;
+constexpr uint32_t kModeSd15 = 0;
+constexpr uint32_t kModeSdxl = 1;
+constexpr uint32_t kSeqLen = 77;
+
+struct Header {
+  char magic[4];
+  uint32_t version;
+  uint32_t mode;
+  uint32_t seq_len;
+  uint32_t hidden_dim;
+  uint32_t pooled_dim;
+};
+}  // namespace prompt_cache
 
 int steps;
 float cfg;
@@ -164,6 +176,97 @@ bool clip_skip_2 = false;
 // QNN function pointers and backend path for dynamic model loading
 QnnFunctionPointers g_qnnSystemFuncs;
 std::string g_backendPathCmd;
+
+// Returns "{model_dir}/cache", creating it if needed. Returns "" when
+// model_dir is empty or directory creation fails; callers must treat that
+// as "caching disabled for this run".
+static std::string ensureCacheDir(const std::string &model_dir) {
+  if (model_dir.empty()) return "";
+  std::filesystem::path p = std::filesystem::path(model_dir) / "cache";
+  std::error_code ec;
+  std::filesystem::create_directories(p, ec);
+  if (ec) return "";
+  return p.string();
+}
+
+// True if any token of `prompt_text` resolves to a textual-inversion
+// embedding loaded by promptProcessor. Used to opt that side out of the
+// persistent prompt cache.
+static bool promptHasEmbedding(const std::string &prompt_text) {
+  auto tokens = promptProcessor.process(prompt_text);
+  for (const auto &t : tokens) {
+    if (t.is_embedding) return true;
+  }
+  return false;
+}
+
+static std::string promptCachePath(const std::string &cache_dir,
+                                   const std::string &prompt_text) {
+  if (cache_dir.empty()) return "";
+  return cache_dir + "/prompt_" + Sha256::hashHex(prompt_text, 32) + ".bin";
+}
+
+// Reads {hidden_states[, pooled]} from disk for `prompt_text`. Returns true
+// on a valid hit; the destination buffers must already be sized for the
+// expected layout. The file is silently treated as miss when missing, wrong
+// magic/version, or dimension mismatch.
+//   - hidden_dst: seq_len * hidden_dim float32
+//   - pooled_dst: pooled_dim float32 (nullptr for SD1.5)
+static bool loadPromptCache(const std::string &cache_dir,
+                            const std::string &prompt_text, uint32_t mode,
+                            uint32_t hidden_dim, uint32_t pooled_dim,
+                            float *hidden_dst, float *pooled_dst) {
+  std::string path = promptCachePath(cache_dir, prompt_text);
+  if (path.empty()) return false;
+  std::ifstream ifs(path, std::ios::binary);
+  if (!ifs) return false;
+
+  prompt_cache::Header h{};
+  ifs.read(reinterpret_cast<char *>(&h), sizeof(h));
+  if (!ifs) return false;
+  if (std::memcmp(h.magic, prompt_cache::kMagic, 4) != 0) return false;
+  if (h.version != prompt_cache::kVersion) return false;
+  if (h.mode != mode) return false;
+  if (h.seq_len != prompt_cache::kSeqLen) return false;
+  if (h.hidden_dim != hidden_dim) return false;
+  if (h.pooled_dim != pooled_dim) return false;
+
+  size_t hidden_bytes = size_t(h.seq_len) * h.hidden_dim * sizeof(float);
+  ifs.read(reinterpret_cast<char *>(hidden_dst), hidden_bytes);
+  if (!ifs) return false;
+  if (pooled_dim > 0) {
+    if (!pooled_dst) return false;
+    size_t pooled_bytes = size_t(pooled_dim) * sizeof(float);
+    ifs.read(reinterpret_cast<char *>(pooled_dst), pooled_bytes);
+    if (!ifs) return false;
+  }
+  return true;
+}
+
+static void savePromptCache(const std::string &cache_dir,
+                            const std::string &prompt_text, uint32_t mode,
+                            uint32_t hidden_dim, uint32_t pooled_dim,
+                            const float *hidden_src, const float *pooled_src) {
+  std::string path = promptCachePath(cache_dir, prompt_text);
+  if (path.empty()) return;
+  std::ofstream ofs(path, std::ios::binary | std::ios::trunc);
+  if (!ofs) return;
+
+  prompt_cache::Header h{};
+  std::memcpy(h.magic, prompt_cache::kMagic, 4);
+  h.version = prompt_cache::kVersion;
+  h.mode = mode;
+  h.seq_len = prompt_cache::kSeqLen;
+  h.hidden_dim = hidden_dim;
+  h.pooled_dim = pooled_dim;
+  ofs.write(reinterpret_cast<const char *>(&h), sizeof(h));
+  ofs.write(reinterpret_cast<const char *>(hidden_src),
+            size_t(h.seq_len) * h.hidden_dim * sizeof(float));
+  if (pooled_dim > 0 && pooled_src) {
+    ofs.write(reinterpret_cast<const char *>(pooled_src),
+              size_t(pooled_dim) * sizeof(float));
+  }
+}
 
 // Global function to create QNN models dynamically
 std::unique_ptr<QnnModel> createQnnModel(const std::string &modelPath,
@@ -1558,7 +1661,14 @@ xt::xarray<uint8_t> upscaleImageWithMNN(const std::vector<uint8_t> &input_image,
   MNN::ScheduleConfig config;
   MNN::BackendConfig backendConfig;
   if (use_opencl) {
-    auto cache_file = model_path + ".mnnc";
+    auto cache_dir = ensureCacheDir(
+        std::filesystem::path(model_path).parent_path().string());
+    auto cache_file =
+        (cache_dir.empty()
+             ? model_path
+             : cache_dir + "/" +
+                   std::filesystem::path(model_path).filename().string()) +
+        ".mnnc";
     interpreter->setCacheFile(cache_file.c_str());
     config.type = MNN_FORWARD_OPENCL;
     config.mode = MNN_GPU_MEMORY_BUFFER | MNN_GPU_TUNING_FAST;
@@ -1772,37 +1882,48 @@ GenerationResult generateImage(
 
     auto clip_start = std::chrono::high_resolution_clock::now();
 
-    // Try to reuse the previous CLIP outputs when the prompt pair is
-    // unchanged. This also skips lowram CLIP (de)allocation in SDXL.
-    const size_t sd_embed_size = (size_t)batch_size * 77 * text_embedding_size;
-    const size_t sdxl_hidden_size = (size_t)batch_size * 77 * sdxl_concat_dim;
-    const size_t sdxl_pooled_size = (size_t)batch_size * text_embedding_size_2;
+    // Persistent per-prompt CLIP cache. Positive and negative are looked up
+    // independently — a one-sided hit still saves half the CLIP work. A side
+    // whose prompt resolves any TI embedding token is excluded from disk
+    // caching: the CLIP output then depends on currently-loaded embedding
+    // data we don't want frozen into a stable file.
+    std::string prompt_cache_dir = ensureCacheDir(modelDir);
+    bool neg_has_emb = promptHasEmbedding(negative_prompt);
+    bool pos_has_emb = promptHasEmbedding(prompt);
+    bool neg_cache_eligible = !prompt_cache_dir.empty() && !neg_has_emb;
+    bool pos_cache_eligible = !prompt_cache_dir.empty() && !pos_has_emb;
 
-    bool clip_cache_hit = false;
-    if (clip_cache_valid && cached_prompt == prompt &&
-        cached_negative_prompt == negative_prompt) {
-      if (sdxl_mode) {
-        if (cached_sdxl_encoder_hidden_states.size() == sdxl_hidden_size &&
-            cached_sdxl_text_embeds.size() == sdxl_pooled_size) {
-          memcpy(sdxl_encoder_hidden_states.data(),
-                 cached_sdxl_encoder_hidden_states.data(),
-                 sdxl_hidden_size * sizeof(float));
-          memcpy(sdxl_text_embeds.data(), cached_sdxl_text_embeds.data(),
-                 sdxl_pooled_size * sizeof(float));
-          clip_cache_hit = true;
-        }
-      } else {
-        if (cached_text_embedding_float.size() == sd_embed_size) {
-          memcpy(text_embedding_float.data(),
-                 cached_text_embedding_float.data(),
-                 sd_embed_size * sizeof(float));
-          clip_cache_hit = true;
-        }
-      }
-    }
+    const uint32_t cache_mode =
+        sdxl_mode ? prompt_cache::kModeSdxl : prompt_cache::kModeSd15;
+    const uint32_t cache_hidden_dim =
+        sdxl_mode ? (uint32_t)sdxl_concat_dim : (uint32_t)text_embedding_size;
+    const uint32_t cache_pooled_dim =
+        sdxl_mode ? (uint32_t)text_embedding_size_2 : 0u;
 
-    if (clip_cache_hit) {
-      QNN_INFO("CLIP cache hit, reusing cached text embeddings");
+    float *neg_hidden_dst = sdxl_mode ? sdxl_encoder_hidden_states.data()
+                                      : text_embedding_float.data();
+    float *pos_hidden_dst =
+        sdxl_mode ? sdxl_encoder_hidden_states.data() + 77 * sdxl_concat_dim
+                  : text_embedding_float.data() + 77 * text_embedding_size;
+    float *neg_pooled_dst = sdxl_mode ? sdxl_text_embeds.data() : nullptr;
+    float *pos_pooled_dst =
+        sdxl_mode ? sdxl_text_embeds.data() + text_embedding_size_2 : nullptr;
+
+    bool neg_hit =
+        neg_cache_eligible &&
+        loadPromptCache(prompt_cache_dir, negative_prompt, cache_mode,
+                        cache_hidden_dim, cache_pooled_dim, neg_hidden_dst,
+                        neg_pooled_dst);
+    bool pos_hit =
+        pos_cache_eligible &&
+        loadPromptCache(prompt_cache_dir, prompt, cache_mode, cache_hidden_dim,
+                        cache_pooled_dim, pos_hidden_dst, pos_pooled_dst);
+
+    if (neg_hit) QNN_INFO("Prompt cache hit (negative)");
+    if (pos_hit) QNN_INFO("Prompt cache hit (positive)");
+
+    if (neg_hit && pos_hit) {
+      QNN_INFO("CLIP cache hit (both sides), skipping CLIP inference");
     } else {
       ProcessedPromptPair processed =
           processPromptPair(prompt, negative_prompt, 77);
@@ -1871,17 +1992,19 @@ GenerationResult generateImage(
                  text_embedding_size_2 * sizeof(float));
         };
 
-        // negative (batch idx 0)
-        run_sdxl_clip(processed.negative_embeddings,
-                      processed.negative_embeddings_2, processed.ids.data(),
-                      sdxl_encoder_hidden_states.data(),
-                      sdxl_text_embeds.data());
-        // positive (batch idx 1)
-        run_sdxl_clip(processed.positive_embeddings,
-                      processed.positive_embeddings_2,
-                      processed.ids.data() + 77,
-                      sdxl_encoder_hidden_states.data() + 77 * sdxl_concat_dim,
-                      sdxl_text_embeds.data() + text_embedding_size_2);
+        if (!neg_hit) {
+          run_sdxl_clip(processed.negative_embeddings,
+                        processed.negative_embeddings_2, processed.ids.data(),
+                        sdxl_encoder_hidden_states.data(),
+                        sdxl_text_embeds.data());
+        }
+        if (!pos_hit) {
+          run_sdxl_clip(
+              processed.positive_embeddings, processed.positive_embeddings_2,
+              processed.ids.data() + 77,
+              sdxl_encoder_hidden_states.data() + 77 * sdxl_concat_dim,
+              sdxl_text_embeds.data() + text_embedding_size_2);
+        }
         if (sdxl_lowram) releaseSdxlClipMnn();
       } else if (use_mnn || use_mnn_clip) {
         MNN::Interpreter *currentClipInterpreter = nullptr;
@@ -1927,21 +2050,25 @@ GenerationResult generateImage(
 
           if (dynamicCreated) currentClipInterpreter->releaseModel();
 
-          memcpy(input->host<float>(), processed.negative_embeddings.data(),
-                 77 * 768 * sizeof(float));
-          currentClipInterpreter->runSession(currentClipSession);
-          auto out = currentClipInterpreter->getSessionOutput(
-              currentClipSession, "last_hidden_state");
-          memcpy(embed_ptr, out->host<float>(),
-                 77 * text_embedding_size * sizeof(float));
+          if (!neg_hit) {
+            memcpy(input->host<float>(), processed.negative_embeddings.data(),
+                   77 * 768 * sizeof(float));
+            currentClipInterpreter->runSession(currentClipSession);
+            auto out = currentClipInterpreter->getSessionOutput(
+                currentClipSession, "last_hidden_state");
+            memcpy(embed_ptr, out->host<float>(),
+                   77 * text_embedding_size * sizeof(float));
+          }
 
-          memcpy(input->host<float>(), processed.positive_embeddings.data(),
-                 77 * 768 * sizeof(float));
-          currentClipInterpreter->runSession(currentClipSession);
-          out = currentClipInterpreter->getSessionOutput(currentClipSession,
-                                                         "last_hidden_state");
-          memcpy(embed_ptr + 77 * text_embedding_size, out->host<float>(),
-                 77 * text_embedding_size * sizeof(float));
+          if (!pos_hit) {
+            memcpy(input->host<float>(), processed.positive_embeddings.data(),
+                   77 * 768 * sizeof(float));
+            currentClipInterpreter->runSession(currentClipSession);
+            auto out = currentClipInterpreter->getSessionOutput(
+                currentClipSession, "last_hidden_state");
+            memcpy(embed_ptr + 77 * text_embedding_size, out->host<float>(),
+                   77 * text_embedding_size * sizeof(float));
+          }
 
           if (sessionCreated)
             currentClipInterpreter->releaseSession(currentClipSession);
@@ -1955,19 +2082,24 @@ GenerationResult generateImage(
 
           if (dynamicCreated) currentClipInterpreter->releaseModel();
 
-          memcpy(input->host<int>(), input_ids_ptr, 77 * sizeof(int32_t));
-          currentClipInterpreter->runSession(currentClipSession);
-          auto out = currentClipInterpreter->getSessionOutput(
-              currentClipSession, "last_hidden_state");
-          memcpy(embed_ptr, out->host<float>(),
-                 77 * text_embedding_size * sizeof(float));
+          if (!neg_hit) {
+            memcpy(input->host<int>(), input_ids_ptr, 77 * sizeof(int32_t));
+            currentClipInterpreter->runSession(currentClipSession);
+            auto out = currentClipInterpreter->getSessionOutput(
+                currentClipSession, "last_hidden_state");
+            memcpy(embed_ptr, out->host<float>(),
+                   77 * text_embedding_size * sizeof(float));
+          }
 
-          memcpy(input->host<int>(), input_ids_ptr + 77, 77 * sizeof(int32_t));
-          currentClipInterpreter->runSession(currentClipSession);
-          out = currentClipInterpreter->getSessionOutput(currentClipSession,
-                                                         "last_hidden_state");
-          memcpy(embed_ptr + 77 * text_embedding_size, out->host<float>(),
-                 77 * text_embedding_size * sizeof(float));
+          if (!pos_hit) {
+            memcpy(input->host<int>(), input_ids_ptr + 77,
+                   77 * sizeof(int32_t));
+            currentClipInterpreter->runSession(currentClipSession);
+            auto out = currentClipInterpreter->getSessionOutput(
+                currentClipSession, "last_hidden_state");
+            memcpy(embed_ptr + 77 * text_embedding_size, out->host<float>(),
+                   77 * text_embedding_size * sizeof(float));
+          }
 
           if (sessionCreated)
             currentClipInterpreter->releaseSession(currentClipSession);
@@ -1976,32 +2108,30 @@ GenerationResult generateImage(
       } else {
         if (!clipApp)
           throw std::runtime_error("Global clipApp not initialized!");
-        if (StatusCode::SUCCESS !=
-            clipApp->executeClipGraphs(input_ids_ptr, embed_ptr))
-          throw std::runtime_error("QNN CLIP exec failed (neg)");
-        if (StatusCode::SUCCESS !=
-            clipApp->executeClipGraphs(input_ids_ptr + 77,
-                                       embed_ptr + 77 * text_embedding_size))
-          throw std::runtime_error("QNN CLIP exec failed (pos)");
+        if (!neg_hit) {
+          if (StatusCode::SUCCESS !=
+              clipApp->executeClipGraphs(input_ids_ptr, embed_ptr))
+            throw std::runtime_error("QNN CLIP exec failed (neg)");
+        }
+        if (!pos_hit) {
+          if (StatusCode::SUCCESS !=
+              clipApp->executeClipGraphs(input_ids_ptr + 77,
+                                         embed_ptr + 77 * text_embedding_size))
+            throw std::runtime_error("QNN CLIP exec failed (pos)");
+        }
       }
 
-      // Persist CLIP outputs so the next request with identical prompts can
-      // bypass the text encoder entirely.
-      cached_prompt = prompt;
-      cached_negative_prompt = negative_prompt;
-      if (sdxl_mode) {
-        cached_sdxl_encoder_hidden_states = sdxl_encoder_hidden_states;
-        cached_sdxl_text_embeds = sdxl_text_embeds;
-        cached_text_embedding_float.clear();
-        cached_text_embedding_float.shrink_to_fit();
-      } else {
-        cached_text_embedding_float = text_embedding_float;
-        cached_sdxl_encoder_hidden_states.clear();
-        cached_sdxl_encoder_hidden_states.shrink_to_fit();
-        cached_sdxl_text_embeds.clear();
-        cached_sdxl_text_embeds.shrink_to_fit();
+      // Persist freshly-computed CLIP outputs (per side). Sides that used a
+      // TI embedding stay out of disk cache.
+      if (!neg_hit && neg_cache_eligible) {
+        savePromptCache(prompt_cache_dir, negative_prompt, cache_mode,
+                        cache_hidden_dim, cache_pooled_dim, neg_hidden_dst,
+                        neg_pooled_dst);
       }
-      clip_cache_valid = true;
+      if (!pos_hit && pos_cache_eligible) {
+        savePromptCache(prompt_cache_dir, prompt, cache_mode, cache_hidden_dim,
+                        cache_pooled_dim, pos_hidden_dst, pos_pooled_dst);
+      }
     }
 
     auto clip_end = std::chrono::high_resolution_clock::now();
@@ -2088,9 +2218,13 @@ GenerationResult generateImage(
         bool loaded_from_cache = false;
         if (aspect_pad_inpaint && aspect_pad_synthetic_base &&
             !modelDir.empty()) {
-          black_latent_cache_path = modelDir + "/aspect_latent_" +
-                                    std::to_string(target_crop_width) + "x" +
-                                    std::to_string(target_crop_height) + ".bin";
+          auto cache_dir = ensureCacheDir(modelDir);
+          if (!cache_dir.empty()) {
+            black_latent_cache_path = cache_dir + "/aspect_latent_" +
+                                      std::to_string(target_crop_width) + "x" +
+                                      std::to_string(target_crop_height) +
+                                      ".bin";
+          }
           std::ifstream ifs(black_latent_cache_path, std::ios::binary);
           if (ifs) {
             ifs.seekg(0, std::ios::end);
@@ -2122,7 +2256,9 @@ GenerationResult generateImage(
             MNN::ScheduleConfig cfg_vae_enc;
             MNN::BackendConfig bkCfg_vae_enc;
             if (use_opencl) {
-              auto cache_file = modelDir + "/vae_enc_cache.mnnc." +
+              auto cache_dir = ensureCacheDir(modelDir);
+              auto cache_file = (cache_dir.empty() ? modelDir : cache_dir) +
+                                "/vae_enc_cache.mnnc." +
                                 std::to_string(output_width);
               currentVaeEncoderInterpreter->setCacheFile(cache_file.c_str());
               cfg_vae_enc.type = MNN_FORWARD_OPENCL;
@@ -2364,8 +2500,9 @@ GenerationResult generateImage(
       MNN::ScheduleConfig cfg_unet;
       MNN::BackendConfig bkCfg_unet;
       if (use_opencl) {
-        auto cache_file =
-            modelDir + "/unet_cache.mnnc." + std::to_string(output_width);
+        auto cache_dir = ensureCacheDir(modelDir);
+        auto cache_file = (cache_dir.empty() ? modelDir : cache_dir) +
+                          "/unet_cache.mnnc." + std::to_string(output_width);
         currentUnetInterpreter->setCacheFile(cache_file.c_str());
         cfg_unet.type = MNN_FORWARD_OPENCL;
         cfg_unet.mode = MNN_GPU_MEMORY_BUFFER | MNN_GPU_TUNING_FAST;
@@ -2717,8 +2854,10 @@ GenerationResult generateImage(
         MNN::ScheduleConfig cfg_vae;
         MNN::BackendConfig bkCfg_vae;
         if (use_opencl) {
-          auto cache_file =
-              modelDir + "/vae_dec_cache.mnnc." + std::to_string(output_width);
+          auto cache_dir = ensureCacheDir(modelDir);
+          auto cache_file = (cache_dir.empty() ? modelDir : cache_dir) +
+                            "/vae_dec_cache.mnnc." +
+                            std::to_string(output_width);
           currentVaeDecoderInterpreter->setCacheFile(cache_file.c_str());
           cfg_vae.type = MNN_FORWARD_OPENCL;
           cfg_vae.mode = MNN_GPU_MEMORY_BUFFER | MNN_GPU_TUNING_FAST;

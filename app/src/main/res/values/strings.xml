@@ -198,6 +198,10 @@
     <string name="back_to_folders">Back to Folders</string>
     <string name="model_folder">Model: %s</string>
     <string name="file_count">%d files</string>
+    <string name="clear_cache">Clear Cache</string>
+    <string name="clear_cache_with_size">Clear Cache (%s)</string>
+    <string name="clear_cache_confirm">Clear the cache directory for this model? Cached prompt embeddings and OpenCL kernels will be regenerated on next use.</string>
+    <string name="cache_cleared">Cache cleared</string>
 
     <!-- Settings -->
     <string name="download_source">Download Source</string>

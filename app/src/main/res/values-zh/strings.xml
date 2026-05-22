@@ -198,6 +198,10 @@
     <string name="back_to_folders">返回文件夹</string>
     <string name="model_folder">模型：%s</string>
     <string name="file_count">%d 个文件</string>
+    <string name="clear_cache">清除缓存</string>
+    <string name="clear_cache_with_size">清除缓存 (%s)</string>
+    <string name="clear_cache_confirm">清除该模型的缓存目录吗？下次使用时会重新生成提示词缓存和 OpenCL 缓存。</string>
+    <string name="cache_cleared">缓存已清除</string>
 
     <!-- Settings -->
     <string name="download_source">下载源</string>
