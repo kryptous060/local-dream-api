@@ -105,13 +105,19 @@ data class Model(
     val approximateSize: String = "1GB",
     val isDownloaded: Boolean = false,
     val needsUpgrade: Boolean = false,
-    val defaultPrompt: String = "",
-    val defaultNegativePrompt: String = "",
+    // Defaults written in code for this model; only the fields it cares about.
+    val codeDefaults: ModelConfig = ModelConfig(),
+    // Defaults read from config.json in the model directory, if present.
+    val configDefaults: ModelConfig = ModelConfig(),
     val runOnCpu: Boolean = false,
     val isCustom: Boolean = false,
     val isSdxl: Boolean = false,
 
 ) {
+    // Per-field priority: code defaults > config.json > global defaults.
+    val defaults: GenerationDefaults
+        get() = codeDefaults.withFallback(configDefaults).resolve()
+
     // Backend --type value; each type implies the full model file layout.
     val backendType: String
         get() = when {
@@ -374,6 +380,14 @@ class ModelRepository(private val context: Context) {
 
     private fun createCustomModel(modelDir: File, isNpu: Boolean = false, isSdxl: Boolean = false): Model {
         val modelId = modelDir.name
+        // Imported models have no code-level defaults: config.json (if
+        // bundled in the zip) wins, the generic placeholder prompts below
+        // only fill what it leaves unset.
+        val placeholders = ModelConfig(
+            prompt = "masterpiece, best quality, a cat sat on a mat,",
+            negativePrompt = "lowres, bad anatomy, bad hands, missing fingers, extra fingers, bad arms, missing legs, missing arms, poorly drawn face, bad face, fused face, cloned face, three crus, fused feet, fused thigh, extra crus, ugly fingers, horn, huge eyes, worst face, 2girl, long fingers, disconnected limbs,",
+        )
+        val config = ModelConfig.read(modelDir) ?: ModelConfig()
 
         return Model(
             id = modelId,
@@ -383,8 +397,7 @@ class ModelRepository(private val context: Context) {
             generationSize = if (isSdxl) 1024 else 512,
             approximateSize = "Custom",
             isDownloaded = true,
-            defaultPrompt = "masterpiece, best quality, a cat sat on a mat,",
-            defaultNegativePrompt = "lowres, bad anatomy, bad hands, missing fingers, extra fingers, bad arms, missing legs, missing arms, poorly drawn face, bad face, fused face, cloned face, three crus, fused feet, fused thigh, extra crus, ugly fingers, horn, huge eyes, worst face, 2girl, long fingers, disconnected limbs,",
+            configDefaults = config.withFallback(placeholders),
             runOnCpu = !isNpu,
             isCustom = true,
             isSdxl = isSdxl,
@@ -396,8 +409,10 @@ class ModelRepository(private val context: Context) {
 
         val predefinedModels = mutableListOf<Model>().apply {
             if (isSdxlCapableSoc(getDeviceSoc())) {
-                add(createSDXLBaseModel())
                 add(createIllustriousV16Model())
+                add(createIllustriousV16Dmd2Model())
+                add(createCyberRealisticV10Model())
+                add(createCyberRealisticV10Dmd2Model())
             }
             add(createAnythingV5Model())
             add(createAnythingV5ModelCPU())
@@ -411,28 +426,64 @@ class ModelRepository(private val context: Context) {
             add(createChilloutMixModel())
         }
 
-        return customModels + predefinedModels
+        return customModels + predefinedModels.map { applyConfigDefaults(it) }
+    }
+
+    // Load config.json shipped inside the model's downloaded files, keeping
+    // any values already merged into configDefaults (e.g. the custom model
+    // placeholders) as fallback.
+    private fun applyConfigDefaults(model: Model): Model {
+        val config = ModelConfig.read(File(Model.getModelsDir(context), model.id)) ?: return model
+        return model.copy(configDefaults = config.withFallback(model.configDefaults))
     }
 
     private fun isSdxlCapableSoc(soc: String): Boolean = soc in setOf("SM8750", "SM8750P", "SM8850", "SM8850P", "SM8845", "SM8650")
 
-    private fun createSDXLBaseModel(): Model {
-        val id = "sdxl_base"
-        val fileUri = "xororz/sdxl-qnn/resolve/main/sdxl_base_qnn2.28_8gen3.zip"
+    private fun createCyberRealisticV10Model(): Model {
+        val id = "cyber_realistic_v10"
+        val fileUri = "xororz/sdxl-qnn/resolve/main/cyber_realistic_v10_qnn2.28_8gen3.zip"
 
         val isDownloaded = Model.isModelDownloaded(context, id, false)
 
         return Model(
             id = id,
-            name = "SDXL Base 1.0",
-            description = context.getString(R.string.sdxl_base_description),
+            name = "CyberRealistic v10",
+            description = context.getString(R.string.cyberrealistic_description),
             baseUrl = baseUrl,
             fileUri = fileUri,
             generationSize = 1024,
             approximateSize = "4.2GB",
             isDownloaded = isDownloaded,
-            defaultPrompt = "masterpiece, best quality, a majestic cat sitting on a windowsill at sunset,",
-            defaultNegativePrompt = "lowres, bad anatomy, bad hands, text, error, missing fingers, extra digit, fewer digits, cropped, worst quality, low quality, normal quality, jpeg artifacts, signature, watermark, username, blurry,",
+            codeDefaults = ModelConfig(
+                prompt = "masterpiece, best quality, a majestic cat sitting on a windowsill at sunset,",
+                negativePrompt = "lowres, bad anatomy, bad hands, text, error, missing fingers, extra digit, fewer digits, cropped, worst quality, low quality, normal quality, jpeg artifacts, signature, watermark, username, blurry,",
+            ),
+            runOnCpu = false,
+            isSdxl = true,
+        )
+    }
+
+    private fun createCyberRealisticV10Dmd2Model(): Model {
+        val id = "cyber_realistic_v10_dmd2"
+        val fileUri = "xororz/sdxl-qnn/resolve/main/cyber_realistic_v10_dmd2_qnn2.28_8gen3.zip"
+
+        val isDownloaded = Model.isModelDownloaded(context, id, false)
+
+        return Model(
+            id = id,
+            name = "CyberRealistic v10 DMD2",
+            description = context.getString(R.string.dmd2_description),
+            baseUrl = baseUrl,
+            fileUri = fileUri,
+            generationSize = 1024,
+            approximateSize = "4.2GB",
+            isDownloaded = isDownloaded,
+            codeDefaults = ModelConfig(
+                prompt = "masterpiece, best quality, a majestic cat sitting on a windowsill at sunset,",
+                negativePrompt = "lowres, bad anatomy, bad hands, text, error, missing fingers, extra digit, fewer digits, cropped, worst quality, low quality, normal quality, jpeg artifacts, signature, watermark, username, blurry,",
+            ),
+            // steps/cfg/scheduler intentionally unset: the distilled model
+            // ships them in a config.json bundled inside the zip.
             runOnCpu = false,
             isSdxl = true,
         )
@@ -453,8 +504,34 @@ class ModelRepository(private val context: Context) {
             generationSize = 1024,
             approximateSize = "4.2GB",
             isDownloaded = isDownloaded,
-            defaultPrompt = "1girl, solo, blue twintails, very long hair, bangs, blue eyes, jewelry, necklace, hair bow, off-shoulder white frilled dress, bare shoulders, collarbone, underwater, floating hair, reaching towards viewer, air bubbles, blue theme, blurry foreground, masterpiece",
-            defaultNegativePrompt = "lowres, bad anatomy, bad hands, missing fingers, extra fingers, bad arms, missing legs, missing arms, poorly drawn face, bad face, fused face, cloned face, three crus, fused feet, fused thigh, extra crus, ugly fingers, horn, realistic photo, huge eyes, worst face, 2girl, long fingers, disconnected limbs,",
+            codeDefaults = ModelConfig(
+                prompt = "1girl, solo, blue twintails, very long hair, bangs, blue eyes, jewelry, necklace, hair bow, off-shoulder white frilled dress, bare shoulders, collarbone, underwater, floating hair, reaching towards viewer, air bubbles, blue theme, blurry foreground, masterpiece",
+                negativePrompt = "lowres, bad anatomy, bad hands, missing fingers, extra fingers, bad arms, missing legs, missing arms, poorly drawn face, bad face, fused face, cloned face, three crus, fused feet, fused thigh, extra crus, ugly fingers, horn, realistic photo, huge eyes, worst face, 2girl, long fingers, disconnected limbs,",
+            ),
+            runOnCpu = false,
+            isSdxl = true,
+        )
+    }
+
+    private fun createIllustriousV16Dmd2Model(): Model {
+        val id = "illustrious_v16_dmd2"
+        val fileUri = "xororz/sdxl-qnn/resolve/main/illustrious_v16_dmd2_qnn2.28_8gen3.zip"
+
+        val isDownloaded = Model.isModelDownloaded(context, id, false)
+
+        return Model(
+            id = id,
+            name = "Illustrious v16 DMD2",
+            description = context.getString(R.string.dmd2_description),
+            baseUrl = baseUrl,
+            fileUri = fileUri,
+            generationSize = 1024,
+            approximateSize = "4.2GB",
+            isDownloaded = isDownloaded,
+            codeDefaults = ModelConfig(
+                prompt = "1girl, solo, blue twintails, very long hair, bangs, blue eyes, jewelry, necklace, hair bow, off-shoulder white frilled dress, bare shoulders, collarbone, underwater, floating hair, reaching towards viewer, air bubbles, blue theme, blurry foreground, masterpiece",
+                negativePrompt = "lowres, bad anatomy, bad hands, missing fingers, extra fingers, bad arms, missing legs, missing arms, poorly drawn face, bad face, fused face, cloned face, three crus, fused feet, fused thigh, extra crus, ugly fingers, horn, realistic photo, huge eyes, worst face, 2girl, long fingers, disconnected limbs,",
+            ),
             runOnCpu = false,
             isSdxl = true,
         )
@@ -478,8 +555,10 @@ class ModelRepository(private val context: Context) {
             approximateSize = "1.1GB",
             isDownloaded = isDownloaded,
             needsUpgrade = needsUpgrade,
-            defaultPrompt = "masterpiece, best quality, 1girl, solo, cute, white hair,",
-            defaultNegativePrompt = "lowres, bad anatomy, bad hands, missing fingers, extra fingers, bad arms, missing legs, missing arms, poorly drawn face, bad face, fused face, cloned face, three crus, fused feet, fused thigh, extra crus, ugly fingers, horn, realistic photo, huge eyes, worst face, 2girl, long fingers, disconnected limbs,",
+            codeDefaults = ModelConfig(
+                prompt = "masterpiece, best quality, 1girl, solo, cute, white hair,",
+                negativePrompt = "lowres, bad anatomy, bad hands, missing fingers, extra fingers, bad arms, missing legs, missing arms, poorly drawn face, bad face, fused face, cloned face, three crus, fused feet, fused thigh, extra crus, ugly fingers, horn, realistic photo, huge eyes, worst face, 2girl, long fingers, disconnected limbs,",
+            ),
             runOnCpu = false,
         )
     }
@@ -498,8 +577,10 @@ class ModelRepository(private val context: Context) {
             fileUri = fileUri,
             approximateSize = "1.2GB",
             isDownloaded = isDownloaded,
-            defaultPrompt = "masterpiece, best quality, 1girl, solo, cute, white hair,",
-            defaultNegativePrompt = "lowres, bad anatomy, bad hands, missing fingers, extra fingers, bad arms, missing legs, missing arms, poorly drawn face, bad face, fused face, cloned face, three crus, fused feet, fused thigh, extra crus, ugly fingers, horn, realistic photo, huge eyes, worst face, 2girl, long fingers, disconnected limbs,",
+            codeDefaults = ModelConfig(
+                prompt = "masterpiece, best quality, 1girl, solo, cute, white hair,",
+                negativePrompt = "lowres, bad anatomy, bad hands, missing fingers, extra fingers, bad arms, missing legs, missing arms, poorly drawn face, bad face, fused face, cloned face, three crus, fused feet, fused thigh, extra crus, ugly fingers, horn, realistic photo, huge eyes, worst face, 2girl, long fingers, disconnected limbs,",
+            ),
             runOnCpu = true,
         )
     }
@@ -521,8 +602,10 @@ class ModelRepository(private val context: Context) {
             approximateSize = "1.1GB",
             isDownloaded = isDownloaded,
             needsUpgrade = needsUpgrade,
-            defaultPrompt = "chibi, best quality, 1girl, solo, cute, pink hair,",
-            defaultNegativePrompt = "lowres, bad anatomy, bad hands, missing fingers, extra fingers, bad arms, missing legs, missing arms, poorly drawn face, bad face, fused face, cloned face, three crus, fused feet, fused thigh, extra crus, ugly fingers, horn, realistic photo, huge eyes, worst face, 2girl, long fingers, disconnected limbs,",
+            codeDefaults = ModelConfig(
+                prompt = "chibi, best quality, 1girl, solo, cute, pink hair,",
+                negativePrompt = "lowres, bad anatomy, bad hands, missing fingers, extra fingers, bad arms, missing legs, missing arms, poorly drawn face, bad face, fused face, cloned face, three crus, fused feet, fused thigh, extra crus, ugly fingers, horn, realistic photo, huge eyes, worst face, 2girl, long fingers, disconnected limbs,",
+            ),
         )
     }
 
@@ -539,8 +622,10 @@ class ModelRepository(private val context: Context) {
             fileUri = fileUri,
             approximateSize = "1.2GB",
             isDownloaded = isDownloaded,
-            defaultPrompt = "chibi, best quality, 1girl, solo, cute, pink hair,",
-            defaultNegativePrompt = "lowres, bad anatomy, bad hands, missing fingers, extra fingers, bad arms, missing legs, missing arms, poorly drawn face, bad face, fused face, cloned face, three crus, fused feet, fused thigh, extra crus, ugly fingers, horn, realistic photo, huge eyes, worst face, 2girl, long fingers, disconnected limbs,",
+            codeDefaults = ModelConfig(
+                prompt = "chibi, best quality, 1girl, solo, cute, pink hair,",
+                negativePrompt = "lowres, bad anatomy, bad hands, missing fingers, extra fingers, bad arms, missing legs, missing arms, poorly drawn face, bad face, fused face, cloned face, three crus, fused feet, fused thigh, extra crus, ugly fingers, horn, realistic photo, huge eyes, worst face, 2girl, long fingers, disconnected limbs,",
+            ),
             runOnCpu = true,
         )
     }
@@ -562,8 +647,10 @@ class ModelRepository(private val context: Context) {
             approximateSize = "1.1GB",
             isDownloaded = isDownloaded,
             needsUpgrade = needsUpgrade,
-            defaultPrompt = "masterpiece, best quality, 1girl, solo, cute, white hair,",
-            defaultNegativePrompt = "lowres, bad anatomy, bad hands, missing fingers, extra fingers, bad arms, missing legs, missing arms, poorly drawn face, bad face, fused face, cloned face, three crus, fused feet, fused thigh, extra crus, ugly fingers, horn, realistic photo, huge eyes, worst face, 2girl, long fingers, disconnected limbs,",
+            codeDefaults = ModelConfig(
+                prompt = "masterpiece, best quality, 1girl, solo, cute, white hair,",
+                negativePrompt = "lowres, bad anatomy, bad hands, missing fingers, extra fingers, bad arms, missing legs, missing arms, poorly drawn face, bad face, fused face, cloned face, three crus, fused feet, fused thigh, extra crus, ugly fingers, horn, realistic photo, huge eyes, worst face, 2girl, long fingers, disconnected limbs,",
+            ),
         )
     }
 
@@ -580,8 +667,10 @@ class ModelRepository(private val context: Context) {
             fileUri = fileUri,
             approximateSize = "1.2GB",
             isDownloaded = isDownloaded,
-            defaultPrompt = "masterpiece, best quality, 1girl, solo, cute, white hair,",
-            defaultNegativePrompt = "lowres, bad anatomy, bad hands, missing fingers, extra fingers, bad arms, missing legs, missing arms, poorly drawn face, bad face, fused face, cloned face, three crus, fused feet, fused thigh, extra crus, ugly fingers, horn, realistic photo, huge eyes, worst face, 2girl, long fingers, disconnected limbs,",
+            codeDefaults = ModelConfig(
+                prompt = "masterpiece, best quality, 1girl, solo, cute, white hair,",
+                negativePrompt = "lowres, bad anatomy, bad hands, missing fingers, extra fingers, bad arms, missing legs, missing arms, poorly drawn face, bad face, fused face, cloned face, three crus, fused feet, fused thigh, extra crus, ugly fingers, horn, realistic photo, huge eyes, worst face, 2girl, long fingers, disconnected limbs,",
+            ),
             runOnCpu = true,
         )
     }
@@ -603,8 +692,10 @@ class ModelRepository(private val context: Context) {
             approximateSize = "1.1GB",
             isDownloaded = isDownloaded,
             needsUpgrade = needsUpgrade,
-            defaultPrompt = "masterpiece, best quality, ultra-detailed, realistic, 8k, a cat on grass,",
-            defaultNegativePrompt = "worst quality, low quality, normal quality, poorly drawn, lowres, low resolution, signature, watermarks, ugly, out of focus, error, blurry, unclear photo, bad photo, unrealistic, semi realistic, pixelated, cartoon, anime, cgi, drawing, 2d, 3d, censored, duplicate,",
+            codeDefaults = ModelConfig(
+                prompt = "masterpiece, best quality, ultra-detailed, realistic, 8k, a cat on grass,",
+                negativePrompt = "worst quality, low quality, normal quality, poorly drawn, lowres, low resolution, signature, watermarks, ugly, out of focus, error, blurry, unclear photo, bad photo, unrealistic, semi realistic, pixelated, cartoon, anime, cgi, drawing, 2d, 3d, censored, duplicate,",
+            ),
             runOnCpu = false,
         )
     }
@@ -622,8 +713,10 @@ class ModelRepository(private val context: Context) {
             fileUri = fileUri,
             approximateSize = "1.2GB",
             isDownloaded = isDownloaded,
-            defaultPrompt = "masterpiece, best quality, ultra-detailed, realistic, 8k, a cat on grass,",
-            defaultNegativePrompt = "worst quality, low quality, normal quality, poorly drawn, lowres, low resolution, signature, watermarks, ugly, out of focus, error, blurry, unclear photo, bad photo, unrealistic, semi realistic, pixelated, cartoon, anime, cgi, drawing, 2d, 3d, censored, duplicate,",
+            codeDefaults = ModelConfig(
+                prompt = "masterpiece, best quality, ultra-detailed, realistic, 8k, a cat on grass,",
+                negativePrompt = "worst quality, low quality, normal quality, poorly drawn, lowres, low resolution, signature, watermarks, ugly, out of focus, error, blurry, unclear photo, bad photo, unrealistic, semi realistic, pixelated, cartoon, anime, cgi, drawing, 2d, 3d, censored, duplicate,",
+            ),
             runOnCpu = true,
         )
     }
@@ -645,8 +738,10 @@ class ModelRepository(private val context: Context) {
             approximateSize = "1.1GB",
             isDownloaded = isDownloaded,
             needsUpgrade = needsUpgrade,
-            defaultPrompt = "RAW photo, best quality, realistic, photo-realistic, masterpiece, 1girl, upper body, facing front, portrait, white shirt",
-            defaultNegativePrompt = "paintings, cartoon, anime, lowres, bad anatomy, bad hands, text, error, missing fingers, extra digit, cropped, worst quality, low quality, normal quality, jpeg artifacts, signature, watermark, username, skin spots, acnes, skin blemishes",
+            codeDefaults = ModelConfig(
+                prompt = "RAW photo, best quality, realistic, photo-realistic, masterpiece, 1girl, upper body, facing front, portrait, white shirt",
+                negativePrompt = "paintings, cartoon, anime, lowres, bad anatomy, bad hands, text, error, missing fingers, extra digit, cropped, worst quality, low quality, normal quality, jpeg artifacts, signature, watermark, username, skin spots, acnes, skin blemishes",
+            ),
             runOnCpu = false,
         )
     }
@@ -664,8 +759,10 @@ class ModelRepository(private val context: Context) {
             fileUri = fileUri,
             approximateSize = "1.2GB",
             isDownloaded = isDownloaded,
-            defaultPrompt = "RAW photo, best quality, realistic, photo-realistic, masterpiece, 1girl, upper body, facing front, portrait, white shirt",
-            defaultNegativePrompt = "paintings, cartoon, anime, lowres, bad anatomy, bad hands, text, error, missing fingers, extra digit, cropped, worst quality, low quality, normal quality, jpeg artifacts, signature, watermark, username, skin spots, acnes, skin blemishes",
+            codeDefaults = ModelConfig(
+                prompt = "RAW photo, best quality, realistic, photo-realistic, masterpiece, 1girl, upper body, facing front, portrait, white shirt",
+                negativePrompt = "paintings, cartoon, anime, lowres, bad anatomy, bad hands, text, error, missing fingers, extra digit, cropped, worst quality, low quality, normal quality, jpeg artifacts, signature, watermark, username, skin spots, acnes, skin blemishes",
+            ),
             runOnCpu = true,
         )
     }
@@ -679,9 +776,11 @@ class ModelRepository(private val context: Context) {
                 } else {
                     false
                 }
-                model.copy(
-                    isDownloaded = isDownloaded,
-                    needsUpgrade = needsUpgrade,
+                applyConfigDefaults(
+                    model.copy(
+                        isDownloaded = isDownloaded,
+                        needsUpgrade = needsUpgrade,
+                    ),
                 )
             } else {
                 model
@@ -700,7 +799,8 @@ class ModelRepository(private val context: Context) {
         // Keep in sync with the create*Model() functions and UpscalerRepository.
         private val RESERVED_MODEL_IDS = setOf(
             // SDXL (NPU)
-            "sdxl_base", "illustrious_v16",
+            "illustrious_v16", "illustrious_v16_dmd2",
+            "cyber_realistic_v10", "cyber_realistic_v10_dmd2",
             // SD 1.5 NPU
             "anythingv5", "qteamix", "cuteyukimix", "absolutereality", "chilloutmix",
             // SD 1.5 CPU

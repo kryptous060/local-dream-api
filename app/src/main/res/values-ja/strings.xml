@@ -2,8 +2,9 @@
 <resources xmlns:tools="http://schemas.android.com/tools">
     <string name="app_name">Local Dream</string>
     <string name="anythingv5_description">Anime Image Generation</string>
-    <string name="sdxl_base_description">SDXL General Image Generation</string>
+    <string name="cyberrealistic_description">Realistic Image Generation</string>
     <string name="illustriousv16_description">WAI Illustrious SDXL v16</string>
+    <string name="dmd2_description">DMD2 LoRAをマージ</string>
     <string name="capture_logs">ログを収集</string>
     <string name="capture_logs_hint">モデル実行中にアプリのログを収集し、終了後に表示します</string>
     <string name="listen_on_all_addresses">LAN からのアクセスを許可</string>
@@ -65,7 +66,7 @@
     <string name="got_it">わかった</string>
     <string name="yes">はい</string>
     <string name="about_app">重要</string>
-    <string name="must_read">このアプリは、CPU/GPU および一部の Qualcomm 製 NPU 上で Stable Diffusion による画像生成を実行できます。\n\nSD1.5 モデルは、Hexagon V68 アーキテクチャ以降の Snapdragon NPU で動作します。\n\nSDXL モデルは、Snapdragon 8 Gen 3 以降のデバイスで動作します。\n\n上記に該当しないチップでは、CPU/GPU のみでの実行となります。\n\nこのプロジェクトはオープンソースで、\nhttps://github.com/xororz/local-dream\nにてソースコードの閲覧や Issue の報告ができます。</string>
+    <string name="must_read">このアプリは、CPU/GPU および一部の Qualcomm 製 NPU 上で Stable Diffusion による画像生成を実行できます。\n\nSD1.5 モデルは、Hexagon V68 アーキテクチャ以降の Snapdragon NPU で動作します。\n\nSDXL モデルは、Snapdragon 8 Gen 3 以降のデバイスで動作します。\n\n上記に該当しないチップでは、CPU/GPU のみでの実行となります。\n\nこのプロジェクトはオープンソースで、\nhttps://github.com/xororz/local-dream\nにてソースコードの閲覧や Issue の報告ができます。\n\nドキュメント：https://ld.chino.icu</string>
     <string name="help">ヘルプ</string>
     <string name="available_models">利用可能なモデル</string>
     <plurals name="selected_items">
@@ -230,7 +231,7 @@
     <string name="file_selected">ファイルを選択</string>
     <string name="add_model">モデルを追加</string>
     <string name="custom_model_hint">SD1.5アーキテクチャセーフテンソルモデルファイルのみをサポートします</string>
-    <string name="custom_npu_model_hint">NPUモデルファイルを含むZIPファイルを選択してください。Qualcommデバイスでのみ利用可能です。</string>
+    <string name="custom_npu_model_hint">NPUモデルファイルを含むZIPファイルを選択してください。Qualcommデバイスでのみ利用可能です。https://huggingface.co/xororz/sdxl-qnn やHugging Faceの他の場所でモデルを見つけられます。</string>
     <string name="converting">変換中…</string>
     <string name="model_conversion_success">モデル変換完了!</string>
     <string name="model_conversion_failed">変換に失敗しました: %s</string>

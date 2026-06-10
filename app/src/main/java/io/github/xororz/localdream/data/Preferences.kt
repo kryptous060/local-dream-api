@@ -125,19 +125,21 @@ class GenerationPreferences(private val context: Context) {
             }
         }
         .map { preferences ->
+            val global = GenerationDefaults.GLOBAL
             GenerationPrefs(
-                prompt = preferences[getPromptKey(modelId)] ?: "",
-                negativePrompt = preferences[getNegativePromptKey(modelId)] ?: "",
-                steps = preferences[getStepsKey(modelId)] ?: 20f,
-                cfg = preferences[getCfgKey(modelId)] ?: 7f,
-                seed = preferences[getSeedKey(modelId)] ?: "",
+                hasSaved = preferences.contains(getPromptKey(modelId)),
+                prompt = preferences[getPromptKey(modelId)] ?: global.prompt,
+                negativePrompt = preferences[getNegativePromptKey(modelId)] ?: global.negativePrompt,
+                steps = preferences[getStepsKey(modelId)] ?: global.steps,
+                cfg = preferences[getCfgKey(modelId)] ?: global.cfg,
+                seed = preferences[getSeedKey(modelId)] ?: global.seed,
                 width = preferences[getWidthKey(modelId)] ?: -1,
                 height = preferences[getHeightKey(modelId)] ?: -1,
-                denoiseStrength = preferences[getDenoiseStrengthKey(modelId)] ?: 0.6f,
+                denoiseStrength = preferences[getDenoiseStrengthKey(modelId)] ?: global.denoiseStrength,
                 useOpenCL = preferences[getUseOpenCLKey(modelId)] ?: false,
-                batchCounts = preferences[getBatchCountsKey(modelId)] ?: 1,
-                scheduler = preferences[getSchedulerKey(modelId)] ?: "dpm",
-                aspectRatio = preferences[getAspectRatioKey(modelId)] ?: "1:1",
+                batchCounts = preferences[getBatchCountsKey(modelId)] ?: global.batchCounts,
+                scheduler = preferences[getSchedulerKey(modelId)] ?: global.scheduler,
+                aspectRatio = preferences[getAspectRatioKey(modelId)] ?: global.aspectRatio,
             )
         }
 
@@ -161,16 +163,19 @@ class GenerationPreferences(private val context: Context) {
 
 @Immutable
 data class GenerationPrefs(
-    val prompt: String = "",
-    val negativePrompt: String = "",
-    val steps: Float = 20f,
-    val cfg: Float = 7f,
-    val seed: String = "",
+    // False until saveAllFields() has run once for this model; lets the run
+    // screen tell "never opened" apart from "user saved these values".
+    val hasSaved: Boolean = false,
+    val prompt: String = GenerationDefaults.GLOBAL.prompt,
+    val negativePrompt: String = GenerationDefaults.GLOBAL.negativePrompt,
+    val steps: Float = GenerationDefaults.GLOBAL.steps,
+    val cfg: Float = GenerationDefaults.GLOBAL.cfg,
+    val seed: String = GenerationDefaults.GLOBAL.seed,
     val width: Int = -1,
     val height: Int = -1,
-    val denoiseStrength: Float = 0.6f,
+    val denoiseStrength: Float = GenerationDefaults.GLOBAL.denoiseStrength,
     val useOpenCL: Boolean = false,
-    val batchCounts: Int = 1,
-    val scheduler: String = "dpm",
-    val aspectRatio: String = "1:1",
+    val batchCounts: Int = GenerationDefaults.GLOBAL.batchCounts,
+    val scheduler: String = GenerationDefaults.GLOBAL.scheduler,
+    val aspectRatio: String = GenerationDefaults.GLOBAL.aspectRatio,
 )

@@ -4,8 +4,9 @@
 
     <!-- Models -->
     <string name="anythingv5_description">动漫图像生成模型</string>
-    <string name="sdxl_base_description">SDXL 通用图像生成模型</string>
+    <string name="cyberrealistic_description">现实场景生成模型</string>
     <string name="illustriousv16_description">WAI Illustrious SDXL v16</string>
+    <string name="dmd2_description">融合了 DMD2 LoRA</string>
     <string name="capture_logs">收集日志</string>
     <string name="capture_logs_hint">运行模型时收集应用日志，退出后展示</string>
     <string name="listen_on_all_addresses">允许局域网访问</string>
@@ -70,7 +71,7 @@
     <string name="got_it">知道了!</string>
     <string name="yes">是</string>
     <string name="about_app">须知</string>
-    <string name="must_read">此APP支持在CPU/GPU和部分高通NPU上运行stable diffusion图像生成。\n\n支持在 Hexagon V68 架构及以上的骁龙 NPU 上运行 SD1.5 模型。\n\n支持在骁龙 8 Gen 3 及更新的设备上运行 SDXL 模型。\n\n若您的芯片不在上述范围内，则只能使用 CPU/GPU 运行。\n\n本项目在 https://github.com/xororz/local-dream 开源，可以在github上查看源代码或提交问题</string>
+    <string name="must_read">此APP支持在CPU/GPU和部分高通NPU上运行stable diffusion图像生成。\n\n支持在 Hexagon V68 架构及以上的骁龙 NPU 上运行 SD1.5 模型。\n\n支持在骁龙 8 Gen 3 及更新的设备上运行 SDXL 模型。\n\n若您的芯片不在上述范围内，则只能使用 CPU/GPU 运行。\n\n本项目在 https://github.com/xororz/local-dream 开源，可以在github上查看源代码或提交问题\n\n文档：https://ld.chino.icu</string>
     <string name="help">帮助</string>
 
     <!-- Model List Screen -->
@@ -254,7 +255,7 @@
     <string name="file_selected">文件已选择</string>
     <string name="add_model">添加模型</string>
     <string name="custom_model_hint">仅支持SD1.5架构的safetensors模型文件</string>
-    <string name="custom_npu_model_hint">选择包含NPU模型文件的ZIP压缩包。仅支持高通芯片设备。</string>
+    <string name="custom_npu_model_hint">选择包含NPU模型文件的ZIP压缩包。仅支持高通芯片设备。你可以在 https://huggingface.co/xororz/sdxl-qnn 或 Hugging Face 其他地方找到一些模型。</string>
     <string name="converting">转换中…</string>
     <string name="model_conversion_success">模型转换成功！</string>
     <string name="model_conversion_failed">转换失败: %s</string>

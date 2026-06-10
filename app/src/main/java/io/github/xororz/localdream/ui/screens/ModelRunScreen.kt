@@ -177,6 +177,7 @@ import coil.request.ImageRequest
 import io.github.xororz.localdream.BuildConfig
 import io.github.xororz.localdream.R
 import io.github.xororz.localdream.data.DownloadProgress
+import io.github.xororz.localdream.data.GenerationDefaults
 import io.github.xororz.localdream.data.GenerationMode
 import io.github.xororz.localdream.data.GenerationPreferences
 import io.github.xororz.localdream.data.HistoryFilter
@@ -549,14 +550,14 @@ fun ModelRunScreen(modelId: String, navController: NavController, modifier: Modi
     // popup stays closed until the user actually does something again.
     var promptPopupDismissed by remember { mutableStateOf(false) }
     var negativePromptPopupDismissed by remember { mutableStateOf(false) }
-    var cfg by remember { mutableFloatStateOf(7f) }
-    var steps by remember { mutableFloatStateOf(20f) }
-    var seed by remember { mutableStateOf("") }
-    var denoiseStrength by remember { mutableFloatStateOf(0.6f) }
+    var cfg by remember { mutableFloatStateOf(GenerationDefaults.GLOBAL.cfg) }
+    var steps by remember { mutableFloatStateOf(GenerationDefaults.GLOBAL.steps) }
+    var seed by remember { mutableStateOf(GenerationDefaults.GLOBAL.seed) }
+    var denoiseStrength by remember { mutableFloatStateOf(GenerationDefaults.GLOBAL.denoiseStrength) }
     var useOpenCL by remember { mutableStateOf(false) }
-    var batchCounts by remember { mutableIntStateOf(1) }
-    var scheduler by remember { mutableStateOf("dpm") }
-    var aspectRatio by remember { mutableStateOf("1:1") }
+    var batchCounts by remember { mutableIntStateOf(GenerationDefaults.GLOBAL.batchCounts) }
+    var scheduler by remember { mutableStateOf(GenerationDefaults.GLOBAL.scheduler) }
+    var aspectRatio by remember { mutableStateOf(GenerationDefaults.GLOBAL.aspectRatio) }
     var showCustomAspectRatioDialog by remember { mutableStateOf(false) }
     var currentBatchIndex by remember { mutableIntStateOf(0) }
     var selectedImageUri by remember { mutableStateOf<Uri?>(null) }
@@ -1461,38 +1462,27 @@ fun ModelRunScreen(modelId: String, navController: NavController, modifier: Modi
     LaunchedEffect(modelId) {
         if (!hasInitialized) {
             val prefs = generationPreferences.getPreferences(modelId).first()
+            val isFirstRun = !prefs.hasSaved
+            val defaults = model?.defaults ?: GenerationDefaults.GLOBAL
 
-            if (prefs.prompt.isEmpty() && prefs.negativePrompt.isEmpty()) {
-                model?.let { m ->
-                    if (m.defaultPrompt.isNotEmpty()) {
-                        prompt = m.defaultPrompt
-                        promptFieldValue =
-                            TextFieldValue(m.defaultPrompt, TextRange(m.defaultPrompt.length))
-                    }
-                    if (m.defaultNegativePrompt.isNotEmpty()) {
-                        negativePrompt = m.defaultNegativePrompt
-                        negativePromptFieldValue = TextFieldValue(
-                            m.defaultNegativePrompt,
-                            TextRange(m.defaultNegativePrompt.length),
-                        )
-                    }
-                    saveAllFields()
-                }
+            if (isFirstRun) {
+                prompt = defaults.prompt
+                negativePrompt = defaults.negativePrompt
             } else {
                 prompt = prefs.prompt
                 negativePrompt = prefs.negativePrompt
-                promptFieldValue = TextFieldValue(prefs.prompt, TextRange(prefs.prompt.length))
-                negativePromptFieldValue =
-                    TextFieldValue(prefs.negativePrompt, TextRange(prefs.negativePrompt.length))
             }
+            promptFieldValue = TextFieldValue(prompt, TextRange(prompt.length))
+            negativePromptFieldValue =
+                TextFieldValue(negativePrompt, TextRange(negativePrompt.length))
 
-            steps = prefs.steps
-            cfg = prefs.cfg
+            steps = if (isFirstRun) defaults.steps else prefs.steps
+            cfg = if (isFirstRun) defaults.cfg else prefs.cfg
             seed = prefs.seed
             denoiseStrength = prefs.denoiseStrength
             useOpenCL = prefs.useOpenCL
             batchCounts = prefs.batchCounts
-            scheduler = prefs.scheduler
+            scheduler = if (isFirstRun) defaults.scheduler else prefs.scheduler
             // Without img2img the backend has no VAE encoder, so a stored
             // non-1:1 ratio would silently fall back to 1024x1024 anyway.
             aspectRatio = if (useImg2img) prefs.aspectRatio else "1:1"
@@ -1513,6 +1503,10 @@ fun ModelRunScreen(modelId: String, navController: NavController, modifier: Modi
                 } else {
                     prefs.height
                 }
+
+            if (isFirstRun && model != null) {
+                saveAllFields()
+            }
 
             hasInitialized = true
         }
@@ -1899,28 +1893,29 @@ fun ModelRunScreen(modelId: String, navController: NavController, modifier: Modi
             confirmButton = {
                 TextButton(
                     onClick = {
-                        steps = 20f
-                        cfg = 7f
-                        seed = ""
-                        batchCounts = 1
-                        scheduler = "dpm"
-                        aspectRatio = "1:1"
-                        prompt = model?.defaultPrompt ?: ""
-                        negativePrompt = model?.defaultNegativePrompt ?: ""
+                        val defaults = model?.defaults ?: GenerationDefaults.GLOBAL
+                        steps = defaults.steps
+                        cfg = defaults.cfg
+                        seed = defaults.seed
+                        batchCounts = defaults.batchCounts
+                        scheduler = defaults.scheduler
+                        aspectRatio = defaults.aspectRatio
+                        prompt = defaults.prompt
+                        negativePrompt = defaults.negativePrompt
                         promptFieldValue = TextFieldValue(prompt, TextRange(prompt.length))
                         negativePromptFieldValue =
                             TextFieldValue(negativePrompt, TextRange(negativePrompt.length))
                         promptSuggestions = emptyList()
                         negativePromptSuggestions = emptyList()
-                        denoiseStrength = 0.6f
+                        denoiseStrength = defaults.denoiseStrength
                         scope.launch(Dispatchers.IO) {
                             generationPreferences.saveAllFields(
                                 modelId = modelId,
-                                prompt = model?.defaultPrompt ?: "",
-                                negativePrompt = model?.defaultNegativePrompt ?: "",
-                                steps = 20f,
-                                cfg = 7f,
-                                seed = "",
+                                prompt = defaults.prompt,
+                                negativePrompt = defaults.negativePrompt,
+                                steps = defaults.steps,
+                                cfg = defaults.cfg,
+                                seed = defaults.seed,
                                 width = if (model?.isSdxl == true) {
                                     1024
                                 } else if (model?.runOnCpu == true) {
@@ -1935,11 +1930,11 @@ fun ModelRunScreen(modelId: String, navController: NavController, modifier: Modi
                                 } else {
                                     512
                                 },
-                                denoiseStrength = 0.6f,
+                                denoiseStrength = defaults.denoiseStrength,
                                 useOpenCL = useOpenCL,
-                                batchCounts = 1,
-                                scheduler = "dpm",
-                                aspectRatio = "1:1",
+                                batchCounts = defaults.batchCounts,
+                                scheduler = defaults.scheduler,
+                                aspectRatio = defaults.aspectRatio,
                             )
                         }
                         showResetConfirmDialog = false

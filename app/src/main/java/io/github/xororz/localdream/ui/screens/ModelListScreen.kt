@@ -324,16 +324,15 @@ fun ModelListScreen(navController: NavController, modifier: Modifier = Modifier)
                         .padding(vertical = 8.dp),
                 ) {
                     val mustReadText = stringResource(R.string.must_read)
-                    val githubUrl = "https://github.com/xororz/local-dream"
                     val linkColor = MaterialTheme.colorScheme.primary
 
                     val annotatedString = buildAnnotatedString {
-                        val startIndex = mustReadText.indexOf(githubUrl)
-                        if (startIndex >= 0) {
-                            append(mustReadText.substring(0, startIndex))
+                        var position = 0
+                        for (match in Regex("""https://\S+""").findAll(mustReadText)) {
+                            append(mustReadText.substring(position, match.range.first))
                             withLink(
                                 LinkAnnotation.Url(
-                                    url = githubUrl,
+                                    url = match.value,
                                     styles = TextLinkStyles(
                                         style = SpanStyle(
                                             color = linkColor,
@@ -342,12 +341,11 @@ fun ModelListScreen(navController: NavController, modifier: Modifier = Modifier)
                                     ),
                                 ),
                             ) {
-                                append(githubUrl)
+                                append(match.value)
                             }
-                            append(mustReadText.substring(startIndex + githubUrl.length))
-                        } else {
-                            append(mustReadText)
+                            position = match.range.last + 1
                         }
+                        append(mustReadText.substring(position))
                     }
 
                     Text(
@@ -2297,8 +2295,33 @@ fun CustomNpuModelDialog(context: Context, onDismiss: () -> Unit, onModelAdded: 
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
+                val hintText = stringResource(R.string.custom_npu_model_hint)
+                val modelsUrl = "https://huggingface.co/xororz/sdxl-qnn"
+                val linkColor = MaterialTheme.colorScheme.primary
+                val hintAnnotated = buildAnnotatedString {
+                    val startIndex = hintText.indexOf(modelsUrl)
+                    if (startIndex >= 0) {
+                        append(hintText.substring(0, startIndex))
+                        withLink(
+                            LinkAnnotation.Url(
+                                url = modelsUrl,
+                                styles = TextLinkStyles(
+                                    style = SpanStyle(
+                                        color = linkColor,
+                                        textDecoration = TextDecoration.Underline,
+                                    ),
+                                ),
+                            ),
+                        ) {
+                            append(modelsUrl)
+                        }
+                        append(hintText.substring(startIndex + modelsUrl.length))
+                    } else {
+                        append(hintText)
+                    }
+                }
                 Text(
-                    text = stringResource(R.string.custom_npu_model_hint),
+                    text = hintAnnotated,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
