@@ -668,11 +668,12 @@ fun ModelRunScreen(modelId: String, navController: NavController, modifier: Modi
     var snapshotSelectedImageUri by remember { mutableStateOf<Uri?>(null) }
     var snapshotCropRect by remember { mutableStateOf<AndroidRect?>(null) }
     var snapshotHasOriginalImage by remember { mutableStateOf(false) }
-    // History-item id of the just-completed inpaint generation, compared against
-    // currentDisplayedHistoryId so saving only stitches when the bitmap on screen
-    // really is that generation (regardless of whether it's the original Bitmap
-    // object or a fresh decode from clicking the thumbnail again).
-    var snapshotHistoryItemId by remember { mutableStateOf<Long?>(null) }
+    // History-item ids whose bitmaps may be stitched back into the inpaint source:
+    // the just-completed inpaint generation plus any upscaled copies derived from
+    // it. Compared against currentDisplayedHistoryId so saving only stitches when
+    // the bitmap on screen really is one of those (regardless of whether it's the
+    // original Bitmap object or a fresh decode from clicking the thumbnail again).
+    var stitchableHistoryIds by remember { mutableStateOf<Set<Long>>(emptySet()) }
     var currentDisplayedHistoryId by remember { mutableStateOf<Long?>(null) }
 
     var saveAllJob: Job? by remember { mutableStateOf(null) }
@@ -1342,17 +1343,18 @@ fun ModelRunScreen(modelId: String, navController: NavController, modifier: Modi
         }
 
         // Only stitch when:
-        //  - the image currently shown is the most recent inpaint generation (matched
-        //    via history-item id, so clicking another thumbnail and back still works
-        //    while clicks on unrelated thumbnails or upscaled results don't stitch), and
+        //  - the image currently shown is the most recent inpaint generation or an
+        //    upscaled copy of it (matched via history-item id, so clicking another
+        //    thumbnail and back still works while clicks on unrelated thumbnails
+        //    don't stitch), and
         //  - the source img2img/inpaint image was a real gallery image with a decodable
         //    URI (not a synthetic tmp.txt from sendBitmapToImg2img).
         val shouldStitch = snapshotIsInpaintMode &&
             snapshotCropRect != null &&
             snapshotSelectedImageUri != null &&
             snapshotHasOriginalImage &&
-            snapshotHistoryItemId != null &&
-            currentDisplayedHistoryId == snapshotHistoryItemId
+            currentDisplayedHistoryId != null &&
+            currentDisplayedHistoryId in stitchableHistoryIds
 
         coroutineScope.launch {
             if (shouldStitch) {
@@ -1621,7 +1623,7 @@ fun ModelRunScreen(modelId: String, navController: NavController, modifier: Modi
                         )
                         if (savedItem != null) {
                             withContext(Dispatchers.Main) {
-                                snapshotHistoryItemId = savedItem.id
+                                stitchableHistoryIds = setOf(savedItem.id)
                                 currentDisplayedHistoryId = savedItem.id
                             }
                         }
@@ -1636,9 +1638,9 @@ fun ModelRunScreen(modelId: String, navController: NavController, modifier: Modi
                     snapshotSelectedImageUri = selectedImageUri
                     snapshotCropRect = cropRect
                     snapshotHasOriginalImage = hasOriginalImageForStitch
-                    // snapshotHistoryItemId / currentDisplayedHistoryId are set once
+                    // stitchableHistoryIds / currentDisplayedHistoryId are set once
                     // the DB save above resolves.
-                    snapshotHistoryItemId = null
+                    stitchableHistoryIds = emptySet()
                     currentDisplayedHistoryId = null
 
                     Log.d(
@@ -4028,6 +4030,11 @@ fun ModelRunScreen(modelId: String, navController: NavController, modifier: Modi
 
                     // Execute upscale
                     currentBitmap?.let { bitmap ->
+                        // If the source image is stitch-eligible (an inpaint result or
+                        // an upscaled copy of one), its upscaled copy is too.
+                        val sourceIsStitchable =
+                            currentDisplayedHistoryId != null &&
+                                currentDisplayedHistoryId in stitchableHistoryIds
                         isUpscaling = true
                         scope.launch {
                             try {
@@ -4060,6 +4067,10 @@ fun ModelRunScreen(modelId: String, navController: NavController, modifier: Modi
                                                     generationParams = updatedParams
                                                     generationParamsModelId = modelId
                                                     currentDisplayedHistoryId = saved.id
+                                                    if (sourceIsStitchable) {
+                                                        stitchableHistoryIds =
+                                                            stitchableHistoryIds + saved.id
+                                                    }
                                                     imageVersion++
                                                 }
                                             }
