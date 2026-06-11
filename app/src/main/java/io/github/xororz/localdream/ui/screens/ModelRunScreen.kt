@@ -10,7 +10,6 @@ import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.BitmapRegionDecoder
-import android.graphics.Canvas
 import android.graphics.Rect as AndroidRect
 import android.net.Uri
 import android.os.Build
@@ -492,6 +491,7 @@ fun ModelRunScreen(modelId: String, navController: NavController, modifier: Modi
     var snapshotIsInpaintMode by remember { mutableStateOf(false) }
     var snapshotSelectedImageUri by remember { mutableStateOf<Uri?>(null) }
     var snapshotCropRect by remember { mutableStateOf<AndroidRect?>(null) }
+    var snapshotMaskBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var snapshotHasOriginalImage by remember { mutableStateOf(false) }
     // History-item ids whose bitmaps may be stitched back into the inpaint source:
     // the just-completed inpaint generation plus any upscaled copies derived from
@@ -916,12 +916,16 @@ fun ModelRunScreen(modelId: String, navController: NavController, modifier: Modi
                         val rectH = snapshotCropRect!!.height()
                         val resizedPatch = bitmap.scale(rectW, rectH)
 
-                        val canvas = Canvas(mutableOriginal)
-                        canvas.drawBitmap(
-                            resizedPatch,
-                            snapshotCropRect!!.left.toFloat(),
-                            snapshotCropRect!!.top.toFloat(),
-                            null,
+                        // Feather-blend along the mask instead of pasting the
+                        // whole rectangle: the patch's unmasked pixels went
+                        // through a resample round trip and differ subtly from
+                        // the original, which shows up as a square seam.
+                        drawInpaintPatch(
+                            target = mutableOriginal,
+                            patch = resizedPatch,
+                            mask = snapshotMaskBitmap,
+                            left = snapshotCropRect!!.left,
+                            top = snapshotCropRect!!.top,
                         )
 
                         saveImage(
@@ -1181,6 +1185,7 @@ fun ModelRunScreen(modelId: String, navController: NavController, modifier: Modi
                     snapshotIsInpaintMode = isInpaintMode
                     snapshotSelectedImageUri = selectedImageUri
                     snapshotCropRect = cropRect
+                    snapshotMaskBitmap = if (isInpaintMode) maskBitmap else null
                     snapshotHasOriginalImage = hasOriginalImageForStitch
                     // stitchableHistoryIds / currentDisplayedHistoryId are set once
                     // the DB save above resolves.

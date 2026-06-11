@@ -5,16 +5,22 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffXfermode
+import android.graphics.Rect
 import android.os.Build
 import androidx.compose.runtime.Immutable
 import androidx.core.content.ContextCompat
 import androidx.core.graphics.createBitmap
+import androidx.core.graphics.scale
 import io.github.xororz.localdream.data.GenerationMode
 import io.github.xororz.localdream.service.BackendService
 import io.github.xororz.localdream.utils.Http
 import java.io.ByteArrayOutputStream
 import java.util.Base64
 import java.util.concurrent.TimeUnit
+import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
@@ -184,6 +190,172 @@ fun padBitmapToCanvas(src: Bitmap, canvasW: Int, canvasH: Int): Bitmap {
     val top = ((canvasH - src.height) / 2).toFloat()
     canvas.drawBitmap(src, left, top, null)
     return out
+}
+
+// Feathered inpaint stitching: the generated patch went through a
+// downscale-to-model-resolution / upscale-back round trip, so even its unmasked
+// pixels differ from the source image (lost high frequencies, resampling
+// shifts). Pasting the whole rectangle therefore leaves a faint square seam.
+// Instead the patch is alpha-blended: opaque over the painted mask, smoothstep
+// falloff to transparent within a feather band just outside it, so everything
+// beyond the band keeps the source image's exact pixels.
+
+// Alpha map is computed at reduced resolution and upscaled with bilinear
+// filtering; the feather is smooth so this loses nothing visible.
+private const val ALPHA_MAP_MAX_DIM = 1024
+
+// Mask alpha at or above this counts as painted (mask strokes are opaque
+// white; lower values only appear on anti-aliased stroke edges).
+private const val MASK_PAINTED_MIN_ALPHA = 128
+
+// 3-4 chamfer weights: distances are in units of 3 per pixel, approximating
+// Euclidean distance.
+private const val CHAMFER_STRAIGHT = 3
+private const val CHAMFER_DIAGONAL = 4
+
+// Feather band width in full-resolution pixels: patchMaxDim / FEATHER_DIVISOR,
+// at least MIN_FEATHER_PX.
+private const val FEATHER_DIVISOR = 32
+private const val MIN_FEATHER_PX = 16
+
+/**
+ * Draws an inpaint result [patch] onto [target] at ([left], [top]).
+ *
+ * When [mask] has painted pixels the patch is feather-blended (see above) so
+ * no rectangular seam appears; otherwise falls back to an opaque paste.
+ * [mask] may be any size; it is scaled to the patch's aspect space.
+ */
+internal fun drawInpaintPatch(target: Bitmap, patch: Bitmap, mask: Bitmap?, left: Int, top: Int) {
+    val canvas = Canvas(target)
+    // Force alpha to 0 along patch edges that sit inside the target image, so
+    // a mask painted close to the crop boundary can't leave a straight seam
+    // there. Edges flush with the image border keep full strength instead.
+    val fade = FadeEdges(
+        left = left > 0,
+        top = top > 0,
+        right = left + patch.width < target.width,
+        bottom = top + patch.height < target.height,
+    )
+    val alphaMap = mask?.let { buildFeatheredAlphaMap(it, patch.width, patch.height, fade) }
+    if (alphaMap == null) {
+        canvas.drawBitmap(patch, left.toFloat(), top.toFloat(), null)
+        return
+    }
+    val maskedPatch = patch.copy(Bitmap.Config.ARGB_8888, true)
+    // Decoded images are opaque, and copy() keeps hasAlpha=false; without this
+    // the DST_IN result is drawn as opaque black instead of transparent.
+    maskedPatch.setHasAlpha(true)
+    Canvas(maskedPatch).drawBitmap(
+        alphaMap,
+        null,
+        Rect(0, 0, maskedPatch.width, maskedPatch.height),
+        Paint(Paint.FILTER_BITMAP_FLAG).apply {
+            xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN)
+        },
+    )
+    canvas.drawBitmap(maskedPatch, left.toFloat(), top.toFloat(), null)
+}
+
+/** Which patch edges must fade to zero alpha (edges interior to the target image). */
+private data class FadeEdges(
+    val left: Boolean,
+    val top: Boolean,
+    val right: Boolean,
+    val bottom: Boolean,
+)
+
+private fun smoothstep(t: Float): Float = t * t * (3f - 2f * t)
+
+/**
+ * Builds the blend alpha map for a patch of size [patchW] x [patchH]: opaque
+ * over the painted mask, smoothstep falloff to transparent across the feather
+ * band outside it, and additionally ramped to zero toward the patch edges
+ * selected by [fade]. Returned at reduced resolution (the caller scales it up
+ * with bilinear filtering). Null when nothing is painted on the mask.
+ */
+private fun buildFeatheredAlphaMap(mask: Bitmap, patchW: Int, patchH: Int, fade: FadeEdges): Bitmap? {
+    val downscale = minOf(1f, ALPHA_MAP_MAX_DIM.toFloat() / maxOf(patchW, patchH))
+    val w = (patchW * downscale).roundToInt().coerceAtLeast(1)
+    val h = (patchH * downscale).roundToInt().coerceAtLeast(1)
+    val scaledMask = if (mask.width != w || mask.height != h) mask.scale(w, h) else mask
+    val pixels = IntArray(w * h)
+    scaledMask.getPixels(pixels, 0, w, 0, 0, w, h)
+
+    val dist = chamferDistanceFromMask(pixels, w, h) ?: return null
+
+    val featherPx = maxOf(MIN_FEATHER_PX, maxOf(patchW, patchH) / FEATHER_DIVISOR)
+    // Feather width in low-res pixels and in chamfer units.
+    val featherLow = (featherPx * downscale).coerceAtLeast(1f)
+    val feather = featherLow * CHAMFER_STRAIGHT
+    for (y in 0 until h) {
+        for (x in 0 until w) {
+            val i = y * w + x
+            val maskOpacity = 1f - smoothstep((dist[i] / feather).coerceAtMost(1f))
+            var edgePx = Int.MAX_VALUE
+            if (fade.left) edgePx = minOf(edgePx, x)
+            if (fade.top) edgePx = minOf(edgePx, y)
+            if (fade.right) edgePx = minOf(edgePx, w - 1 - x)
+            if (fade.bottom) edgePx = minOf(edgePx, h - 1 - y)
+            val edgeOpacity = if (edgePx == Int.MAX_VALUE) {
+                1f
+            } else {
+                smoothstep((edgePx / featherLow).coerceAtMost(1f))
+            }
+            val opacity = maskOpacity * edgeOpacity
+            pixels[i] = ((opacity * 0xFF).roundToInt() shl 24) or 0xFFFFFF
+        }
+    }
+    return createBitmap(w, h).apply { setPixels(pixels, 0, w, 0, 0, w, h) }
+}
+
+/**
+ * Two-pass 3-4 chamfer distance transform over the mask's alpha channel:
+ * distance from each pixel to the nearest painted pixel, in CHAMFER_STRAIGHT
+ * units per pixel. Null when no pixel is painted.
+ */
+@Suppress("CyclomaticComplexMethod")
+private fun chamferDistanceFromMask(maskPixels: IntArray, w: Int, h: Int): IntArray? {
+    val far = Int.MAX_VALUE / 2
+    val dist = IntArray(maskPixels.size)
+    var anyPainted = false
+    for (i in dist.indices) {
+        if ((maskPixels[i] ushr 24) >= MASK_PAINTED_MIN_ALPHA) {
+            anyPainted = true
+        } else {
+            dist[i] = far
+        }
+    }
+    if (!anyPainted) return null
+
+    for (y in 0 until h) {
+        for (x in 0 until w) {
+            val i = y * w + x
+            var d = dist[i]
+            if (d == 0) continue
+            if (x > 0) d = minOf(d, dist[i - 1] + CHAMFER_STRAIGHT)
+            if (y > 0) {
+                d = minOf(d, dist[i - w] + CHAMFER_STRAIGHT)
+                if (x > 0) d = minOf(d, dist[i - w - 1] + CHAMFER_DIAGONAL)
+                if (x < w - 1) d = minOf(d, dist[i - w + 1] + CHAMFER_DIAGONAL)
+            }
+            dist[i] = d
+        }
+    }
+    for (y in h - 1 downTo 0) {
+        for (x in w - 1 downTo 0) {
+            val i = y * w + x
+            var d = dist[i]
+            if (d == 0) continue
+            if (x < w - 1) d = minOf(d, dist[i + 1] + CHAMFER_STRAIGHT)
+            if (y < h - 1) {
+                d = minOf(d, dist[i + w] + CHAMFER_STRAIGHT)
+                if (x < w - 1) d = minOf(d, dist[i + w + 1] + CHAMFER_DIAGONAL)
+                if (x > 0) d = minOf(d, dist[i + w - 1] + CHAMFER_DIAGONAL)
+            }
+            dist[i] = d
+        }
+    }
+    return dist
 }
 
 /**
