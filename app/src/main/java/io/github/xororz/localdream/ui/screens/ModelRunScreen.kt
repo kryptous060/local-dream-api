@@ -687,9 +687,9 @@ fun ModelRunScreen(modelId: String, navController: NavController, modifier: Modi
                 val needsPad =
                     scaled.width != currentWidth || scaled.height != currentHeight
                 val payload = if (needsPad) {
-                    bitmapToBase64Jpeg(padBitmapToCanvas(scaled, currentWidth, currentHeight))
+                    bitmapToBase64Png(padBitmapToCanvas(scaled, currentWidth, currentHeight))
                 } else {
-                    bitmapToBase64Jpeg(scaled)
+                    bitmapToBase64Png(scaled)
                 }
 
                 withContext(Dispatchers.Main) {
@@ -790,7 +790,7 @@ fun ModelRunScreen(modelId: String, navController: NavController, modifier: Modi
                     }
 
                 val base64String = withContext(Dispatchers.IO) {
-                    bitmapToBase64Jpeg(uploadBitmap)
+                    bitmapToBase64Png(uploadBitmap)
                 }
 
                 withContext(Dispatchers.IO) {

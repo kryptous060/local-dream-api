@@ -188,23 +188,16 @@ fun padBitmapToCanvas(src: Bitmap, canvasW: Int, canvasH: Int): Bitmap {
 
 /**
  * PNG-compresses the bitmap (lossless; the quality argument is ignored by the
- * PNG encoder) and returns it as a base64 string for backend upload. Used for
- * masks, where pixel-exact values matter.
+ * PNG encoder) and returns it as a base64 string for backend upload.
+ *
+ * Uploads must stay lossless: inpaint pastes the unmasked region of the
+ * uploaded base image verbatim into the final result (laplacian blend), so
+ * any compression artifacts would survive into the output. Masks need exact
+ * pixel values anyway.
  */
 internal fun bitmapToBase64Png(bitmap: Bitmap): String {
     val baos = ByteArrayOutputStream()
     bitmap.compress(Bitmap.CompressFormat.PNG, 100, baos)
-    return Base64.getEncoder().encodeToString(baos.toByteArray())
-}
-
-/**
- * JPEG-compresses the bitmap at quality 95 and returns it as a base64 string.
- * Used for the img2img base image: it gets VAE-encoded (lossy) anyway, and
- * JPEG encodes much faster and smaller than PNG for photographic content.
- */
-internal fun bitmapToBase64Jpeg(bitmap: Bitmap): String {
-    val baos = ByteArrayOutputStream()
-    bitmap.compress(Bitmap.CompressFormat.JPEG, 95, baos)
     return Base64.getEncoder().encodeToString(baos.toByteArray())
 }
 
