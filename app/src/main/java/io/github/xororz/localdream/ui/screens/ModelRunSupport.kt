@@ -84,6 +84,10 @@ internal suspend fun checkBackendHealth(
     try {
         val startTime = System.currentTimeMillis()
         val timeoutDuration = 60000
+        // Poll fast while the backend is likely just starting, then back off:
+        // model loading takes seconds to minutes, so hammering every 100 ms
+        // for the whole window is pointless.
+        var pollDelayMs = 100L
 
         while (currentCoroutineContext().isActive) {
             if (backendState.value is BackendService.BackendState.Error) {
@@ -114,10 +118,11 @@ internal suspend fun checkBackendHealth(
                     break
                 }
             } catch (e: Exception) {
-                // e
+                // Backend not up yet; retry after the current delay.
             }
 
-            delay(100)
+            delay(pollDelayMs)
+            pollDelayMs = (pollDelayMs * 2).coerceAtMost(500L)
         }
     } catch (e: Exception) {
         withContext(Dispatchers.Main) {
@@ -181,10 +186,25 @@ fun padBitmapToCanvas(src: Bitmap, canvasW: Int, canvasH: Int): Bitmap {
     return out
 }
 
-/** PNG-compresses the bitmap and returns it as a base64 string for backend upload. */
+/**
+ * PNG-compresses the bitmap (lossless; the quality argument is ignored by the
+ * PNG encoder) and returns it as a base64 string for backend upload. Used for
+ * masks, where pixel-exact values matter.
+ */
 internal fun bitmapToBase64Png(bitmap: Bitmap): String {
     val baos = ByteArrayOutputStream()
-    bitmap.compress(Bitmap.CompressFormat.PNG, 90, baos)
+    bitmap.compress(Bitmap.CompressFormat.PNG, 100, baos)
+    return Base64.getEncoder().encodeToString(baos.toByteArray())
+}
+
+/**
+ * JPEG-compresses the bitmap at quality 95 and returns it as a base64 string.
+ * Used for the img2img base image: it gets VAE-encoded (lossy) anyway, and
+ * JPEG encodes much faster and smaller than PNG for photographic content.
+ */
+internal fun bitmapToBase64Jpeg(bitmap: Bitmap): String {
+    val baos = ByteArrayOutputStream()
+    bitmap.compress(Bitmap.CompressFormat.JPEG, 95, baos)
     return Base64.getEncoder().encodeToString(baos.toByteArray())
 }
 

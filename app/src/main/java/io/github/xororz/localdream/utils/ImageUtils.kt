@@ -15,8 +15,6 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
-import java.net.HttpURLConnection
-import java.net.URL
 import java.util.Base64
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
@@ -35,6 +33,16 @@ private val reportClient: OkHttpClient by lazy {
         .connectTimeout(30, TimeUnit.SECONDS)
         .writeTimeout(60, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
+        .build()
+}
+
+// A single upscale call covers model load + tiled inference, which can take
+// minutes for large inputs.
+private val upscaleClient: OkHttpClient by lazy {
+    Http.client.newBuilder()
+        .connectTimeout(300, TimeUnit.SECONDS)
+        .writeTimeout(300, TimeUnit.SECONDS)
+        .readTimeout(300, TimeUnit.SECONDS)
         .build()
 }
 
@@ -74,75 +82,53 @@ suspend fun performUpscale(context: Context, bitmap: Bitmap, upscalerId: String)
         "Prepare RGB data took: ${System.currentTimeMillis() - prepareStartTime}ms",
     )
 
-    // Prepare binary request
-    val url = URL("http://localhost:8081/upscale")
-    val connection = url.openConnection() as HttpURLConnection
+    // Binary protocol: raw RGB in, JPEG out, metadata in headers.
+    val request = Request.Builder()
+        .url("http://localhost:8081/upscale")
+        .header("X-Image-Width", width.toString())
+        .header("X-Image-Height", height.toString())
+        .header("X-Upscaler-Path", upscalerFile.absolutePath)
+        .post(rgbBytes.toRequestBody("application/octet-stream".toMediaTypeOrNull()))
+        .build()
 
-    try {
-        connection.requestMethod = "POST"
-        connection.setRequestProperty("Content-Type", "application/octet-stream")
-        connection.setRequestProperty("X-Image-Width", width.toString())
-        connection.setRequestProperty("X-Image-Height", height.toString())
-        connection.setRequestProperty("X-Upscaler-Path", upscalerFile.absolutePath)
-        connection.doOutput = true
-        connection.connectTimeout = 300000 // 5 minutes
-        connection.readTimeout = 300000
-
-        // Send RGB binary data directly
-        val sendStartTime = System.currentTimeMillis()
-        connection.outputStream.use { os ->
-            os.write(rgbBytes)
+    upscaleClient.newCall(request).execute().use { response ->
+        if (!response.isSuccessful) {
+            val errorBody = response.body?.string()
+            throw Exception("Upscale failed with response code: ${response.code}, error: $errorBody")
         }
+
+        // Read JPEG binary data
+        val readStartTime = System.currentTimeMillis()
+        val imageBytes = response.body?.bytes() ?: throw Exception("Empty upscale response")
         Log.d(
             "UpscaleBinary",
-            "Send data took: ${System.currentTimeMillis() - sendStartTime}ms",
+            "Receive JPEG data took: ${System.currentTimeMillis() - readStartTime}ms, size: ${imageBytes.size / 1024}KB",
         )
 
-        // Read response
-        val responseCode = connection.responseCode
-        if (responseCode == HttpURLConnection.HTTP_OK) {
-            // Read JPEG binary data
-            val readStartTime = System.currentTimeMillis()
-            val imageBytes = connection.inputStream.use { it.readBytes() }
-            Log.d(
-                "UpscaleBinary",
-                "Receive JPEG data took: ${System.currentTimeMillis() - readStartTime}ms, size: ${imageBytes.size / 1024}KB",
-            )
+        // Decode JPEG to Bitmap
+        val decodeStartTime = System.currentTimeMillis()
+        val resultBitmap = BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size)
+            ?: throw Exception("Failed to decode JPEG response")
+        Log.d(
+            "UpscaleBinary",
+            "Decode JPEG took: ${System.currentTimeMillis() - decodeStartTime}ms",
+        )
 
-            // Decode JPEG to Bitmap
-            val decodeStartTime = System.currentTimeMillis()
-            val resultBitmap = BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size)
-            Log.d(
-                "UpscaleBinary",
-                "Decode JPEG took: ${System.currentTimeMillis() - decodeStartTime}ms",
-            )
+        val resultWidth =
+            response.header("X-Output-Width")?.toIntOrNull() ?: resultBitmap.width
+        val resultHeight =
+            response.header("X-Output-Height")?.toIntOrNull() ?: resultBitmap.height
+        val durationMs = response.header("X-Duration-Ms")?.toIntOrNull() ?: 0
 
-            if (resultBitmap == null) {
-                throw Exception("Failed to decode JPEG response")
-            }
+        Log.d("UpscaleBinary", "=== Upscale complete ===")
+        Log.d("UpscaleBinary", "Server processing took: ${durationMs}ms")
+        Log.d(
+            "UpscaleBinary",
+            "Client total time: ${System.currentTimeMillis() - totalStartTime}ms",
+        )
+        Log.d("UpscaleBinary", "Output size: ${resultWidth}x$resultHeight")
 
-            // Read response headers
-            val resultWidth =
-                connection.getHeaderField("X-Output-Width")?.toIntOrNull() ?: resultBitmap.width
-            val resultHeight =
-                connection.getHeaderField("X-Output-Height")?.toIntOrNull() ?: resultBitmap.height
-            val durationMs = connection.getHeaderField("X-Duration-Ms")?.toIntOrNull() ?: 0
-
-            Log.d("UpscaleBinary", "=== Upscale complete ===")
-            Log.d("UpscaleBinary", "Server processing took: ${durationMs}ms")
-            Log.d(
-                "UpscaleBinary",
-                "Client total time: ${System.currentTimeMillis() - totalStartTime}ms",
-            )
-            Log.d("UpscaleBinary", "Output size: ${resultWidth}x$resultHeight")
-
-            resultBitmap
-        } else {
-            val errorBody = connection.errorStream?.bufferedReader()?.use { it.readText() }
-            throw Exception("Upscale failed with response code: $responseCode, error: $errorBody")
-        }
-    } finally {
-        connection.disconnect()
+        resultBitmap
     }
 }
 
