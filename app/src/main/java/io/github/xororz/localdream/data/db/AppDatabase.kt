@@ -87,7 +87,10 @@ abstract class AppDatabase : RoomDatabase() {
                 "local_dream.db",
             )
                 .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
-                .fallbackToDestructiveMigration(dropAllTables = true)
+                // No destructive fallback: a future schema bump without a
+                // matching migration should fail loudly at open time rather
+                // than silently dropping the user's whole generation history.
+                // Add a Migration for every version increment instead.
                 .build()
                 .also { INSTANCE = it }
         }
