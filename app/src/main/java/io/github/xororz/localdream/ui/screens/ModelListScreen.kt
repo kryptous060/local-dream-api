@@ -2591,15 +2591,15 @@ fun CustomNpuModelDialog(context: Context, onDismiss: () -> Unit, onModelAdded: 
                 verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
                 val hintText = stringResource(R.string.custom_npu_model_hint)
-                val modelsUrl = "https://huggingface.co/xororz/sdxl-qnn"
                 val linkColor = MaterialTheme.colorScheme.primary
                 val hintAnnotated = buildAnnotatedString {
-                    val startIndex = hintText.indexOf(modelsUrl)
-                    if (startIndex >= 0) {
-                        append(hintText.substring(0, startIndex))
+                    val urlRegex = Regex("https://[^\\s,，、。]+")
+                    var lastIndex = 0
+                    for (match in urlRegex.findAll(hintText)) {
+                        append(hintText.substring(lastIndex, match.range.first))
                         withLink(
                             LinkAnnotation.Url(
-                                url = modelsUrl,
+                                url = match.value,
                                 styles = TextLinkStyles(
                                     style = SpanStyle(
                                         color = linkColor,
@@ -2608,12 +2608,11 @@ fun CustomNpuModelDialog(context: Context, onDismiss: () -> Unit, onModelAdded: 
                                 ),
                             ),
                         ) {
-                            append(modelsUrl)
+                            append(match.value)
                         }
-                        append(hintText.substring(startIndex + modelsUrl.length))
-                    } else {
-                        append(hintText)
+                        lastIndex = match.range.last + 1
                     }
+                    append(hintText.substring(lastIndex))
                 }
                 Text(
                     text = hintAnnotated,

@@ -267,7 +267,7 @@
     <string name="file_selected">ファイルを選択</string>
     <string name="add_model">モデルを追加</string>
     <string name="custom_model_hint">SD1.5アーキテクチャセーフテンソルモデルファイルのみをサポートします</string>
-    <string name="custom_npu_model_hint">NPUモデルファイルを含むZIPファイルを選択してください。Qualcommデバイスでのみ利用可能です。https://huggingface.co/xororz/sdxl-qnn やHugging Faceの他の場所でモデルを見つけられます。</string>
+    <string name="custom_npu_model_hint">NPUモデルファイルを含むZIPファイルを選択してください。Qualcommデバイスでのみ利用可能です。https://huggingface.co/xororz/sd-qnn や https://huggingface.co/xororz/sdxl-qnn 、Hugging Faceの他の場所でモデルを見つけられます。</string>
     <string name="converting">変換中…</string>
     <string name="model_conversion_success">モデル変換完了!</string>
     <string name="model_conversion_failed">変換に失敗しました: %s</string>
