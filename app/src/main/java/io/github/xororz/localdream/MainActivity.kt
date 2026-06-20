@@ -41,8 +41,16 @@ import io.github.xororz.localdream.ui.theme.sharedAxisXPopEnter
 import io.github.xororz.localdream.ui.theme.sharedAxisXPopExit
 import io.github.xororz.localdream.ui.theme.sharedAxisXPredictivePopEnter
 import io.github.xororz.localdream.ui.theme.sharedAxisXPredictivePopExit
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 
 class MainActivity : ComponentActivity() {
+
+    // --- Global Event Bus for API Requests ---
+    companion object {
+        private val _apiRequests = MutableSharedFlow<Pair<String, String>>(extraBufferCapacity = 5)
+        val apiRequests = _apiRequests.asSharedFlow()
+    }
 
     // --- Local API Server Variables ---
     private var localServer: LocalDreamServer? = null
@@ -137,12 +145,12 @@ class MainActivity : ComponentActivity() {
         localServer = LocalDreamServer(
             port = 8080,
             onGenerateImage = { positive, negative ->
-                runOnUiThread {
-                    Log.d("API", "Triggering generation. Positive: $positive")
-                    
-                    // TODO: Connect this to your ModelRunScreen's ViewModel to trigger the generation
-                    // and keep it synced with the rest of your automated loop.
-                    Toast.makeText(this, "API Request Received!", Toast.LENGTH_SHORT).show()
+                // Emit the prompts into the flow immediately
+                val success = _apiRequests.tryEmit(Pair(positive, negative))
+                if (success) {
+                    Log.d("API", "Successfully routed prompt: $positive")
+                } else {
+                    Log.e("API", "Failed to route prompt (buffer full)")
                 }
             },
             onUpdateSaveFolder = { folderPath ->
