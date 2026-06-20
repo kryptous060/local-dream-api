@@ -151,6 +151,8 @@ dependencies {
     ksp(libs.androidx.room.compiler)
     implementation(libs.androidx.paging.runtime)
     implementation(libs.androidx.paging.compose)
+    implementation 'org.nanohttpd:nanohttpd:2.3.1'
+    implementation 'com.google.code.gson:gson:2.10.1'
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
