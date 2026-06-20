@@ -5,6 +5,8 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
+import android.util.Log
+import androidx.appcompat.app.AppCompatActivity
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -41,6 +43,11 @@ import io.github.xororz.localdream.ui.theme.sharedAxisXPredictivePopEnter
 import io.github.xororz.localdream.ui.theme.sharedAxisXPredictivePopExit
 
 class MainActivity : ComponentActivity() {
+
+    // --- Local API Server Variables ---
+    private var localServer: LocalDreamServer? = null
+    private var customSaveFolder: String = "/sdcard/Pictures/LocalDream"
+
     private val requestStoragePermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { isGranted: Boolean ->
@@ -126,6 +133,32 @@ class MainActivity : ComponentActivity() {
         checkStoragePermission()
         checkNotificationPermission()
 
+        // --- Initialize the Local API Server ---
+        localServer = LocalDreamServer(
+            port = 8080,
+            onGenerateImage = { positive, negative ->
+                runOnUiThread {
+                    Log.d("API", "Triggering generation. Positive: $positive")
+                    
+                    // TODO: Connect this to your ModelRunScreen's ViewModel to trigger the generation
+                    // and keep it synced with the rest of your automated loop.
+                    Toast.makeText(this, "API Request Received!", Toast.LENGTH_SHORT).show()
+                }
+            },
+            onUpdateSaveFolder = { folderPath ->
+                customSaveFolder = folderPath
+                Log.d("API", "Save folder updated to: $folderPath")
+            }
+        )
+
+        try {
+            localServer?.start()
+            Log.d("API", "Local API Server started on port 8080")
+        } catch (e: Exception) {
+            Log.e("API", "Failed to start server", e)
+        }
+        // ---------------------------------------
+
         val app = application as LocalDreamApplication
 
         setContent {
@@ -156,6 +189,13 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    // --- Clean up the server when the app closes ---
+    override fun onDestroy() {
+        super.onDestroy()
+        localServer?.stop()
+        Log.d("API", "Local API Server stopped")
     }
 }
 
