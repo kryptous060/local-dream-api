@@ -219,22 +219,32 @@ fun ModelRunScreen(modelId: String, navController: NavController, modifier: Modi
     val focusManager = LocalFocusManager.current
     val interactionSource = remember { MutableInteractionSource() }
 
-    // --- Add the following trigger logic ---
-    LaunchedEffect(Unit) {
-        // Replace 'ExternalTrigger.requestFlow' with your actual trigger mechanism
-        // e.g., if you have a custom ViewModel or Service that broadcasts events
-        ExternalTrigger.requestFlow.collect { params ->
-            if (params.modelId == modelId) {
-                promptField.replaceText(params.prompt)
-                steps = params.steps.toFloat()
-                cfg = params.cfg
-                
-                Toast.makeText(context, "API Generation Triggered", Toast.LENGTH_SHORT).show()
-                // Optional: Trigger generation immediately
-                // startGeneration(promptField.text, ...)
-            }
+// --- Add this block into your ModelRunScreen composable ---
+LaunchedEffect(Unit) {
+    // Replace 'ExternalTrigger.requestFlow' with your actual trigger mechanism
+    // e.g., yourViewModel.apiCommandFlow
+    ExternalTrigger.requestFlow.collect { params ->
+        if (params.modelId == modelId) {
+            // 1. Update the UI state
+            promptField.replaceText(params.prompt)
+            steps = params.steps.toFloat()
+            cfg = params.cfg
+            
+            // 2. Save these values to preferences
+            saveAllFields()
+            
+            // 3. Trigger the standard generation
+            // You should have a function in ModelRunScreen that initiates 
+            // the generation. It is likely called 'startGeneration()' or similar.
+            // If you don't have one, create a function that replicates 
+            // the logic of your "Generate" button.
+            // Example:
+            // startGeneration() 
+            
+            Toast.makeText(context, "API Generation Triggered", Toast.LENGTH_SHORT).show()
         }
     }
+}
 
     val view = LocalView.current
     DisposableEffect(view) {
