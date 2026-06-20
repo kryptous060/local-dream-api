@@ -219,6 +219,23 @@ fun ModelRunScreen(modelId: String, navController: NavController, modifier: Modi
     val focusManager = LocalFocusManager.current
     val interactionSource = remember { MutableInteractionSource() }
 
+    // --- Add the following trigger logic ---
+    LaunchedEffect(Unit) {
+        // Replace 'ExternalTrigger.requestFlow' with your actual trigger mechanism
+        // e.g., if you have a custom ViewModel or Service that broadcasts events
+        ExternalTrigger.requestFlow.collect { params ->
+            if (params.modelId == modelId) {
+                promptField.replaceText(params.prompt)
+                steps = params.steps.toFloat()
+                cfg = params.cfg
+                
+                Toast.makeText(context, "API Generation Triggered", Toast.LENGTH_SHORT).show()
+                // Optional: Trigger generation immediately
+                // startGeneration(promptField.text, ...)
+            }
+        }
+    }
+
     val view = LocalView.current
     DisposableEffect(view) {
         view.keepScreenOn = true
